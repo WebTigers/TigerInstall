@@ -53,7 +53,7 @@ This installer is **not** rebuilt per Tiger release. It resolves the **latest** 
 runtime and installs it. One permanent URL, forever:
 
 ```
-https://raw.githubusercontent.com/WebTigers/tiger-install/main/tiger-install.php
+https://raw.githubusercontent.com/WebTigers/TigerInstall/main/tiger-install.php
 ```
 
 To pin a specific version, add `?version=<tag>` when you open it.

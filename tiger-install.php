@@ -22,7 +22,7 @@
  * the code is extracted it bootstraps Tiger and calls the platform's OWN installer (Tiger_Install)
  * so nothing here re-implements migrations, secrets, or admin creation.
  *
- * Repo: https://github.com/WebTigers/tiger-install  (evergreen — one file, resolves the latest release)
+ * Repo: https://github.com/WebTigers/TigerInstall  (evergreen — one file, resolves the latest release)
  */
 
 error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
