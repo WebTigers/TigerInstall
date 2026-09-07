@@ -29,7 +29,7 @@ error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
 @ini_set('display_errors', '1');
 @set_time_limit(0);
 
-const INSTALLER_VERSION = '1.0.0';
+const INSTALLER_VERSION = '1.0.2';
 const RELEASE_REPO      = 'webtigers/tiger';   // the skeleton repo whose releases host the full-app bundle
 const MIN_PHP           = '8.1.0';
 const GH_API            = 'https://api.github.com';
@@ -182,8 +182,12 @@ function preflight($docroot, $home) {
         'PHP must run as your cPanel user (it does on modern hosts).');
     $add('Docroot writable', is_writable($docroot), true, h($docroot) . ' — for the shim + assets',
         'Fix file ownership/permissions on the document root.');
-    $add('symlink()', function_exists('symlink'), false, 'Asset links (a copy fallback is used otherwise)',
-        'Optional — ask your host to allow symlink().');
+    $add('symlink()', function_exists('symlink'), false,
+        function_exists('symlink')
+            ? 'Assets are linked, so a Tiger update is picked up automatically'
+            : 'Blocked here — assets will be COPIED instead. Tiger installs and runs fine; updates '
+              . 're-copy them for you.',
+        'Optional. Ask your host to allow symlink() for slightly leaner updates.');
     return $checks;
 }
 
@@ -417,10 +421,14 @@ function do_install_files($bag, $home) {
     try {
         Tiger_Install::provisionStorage($appDir);
         Tiger_Install::linkPublicAssets($docroot, $appDir, 'puma');
+        // These were previously created ONLY when symlink() existed, and silently skipped
+        // otherwise — no link, no copy, no error. Copy where linking is unavailable so media,
+        // code assets and module assets are actually served on a locked-down host.
         foreach (['_media', '_code', '_modules'] as $pub) {
             $target = $appDir . '/public/' . $pub;
             $link   = $docroot . '/' . $pub;
-            if (is_dir($target) && !file_exists($link) && function_exists('symlink')) { @symlink($target, $link); }
+            if (!is_dir($target) || file_exists($link)) { continue; }
+            if (!(function_exists('symlink') && @symlink($target, $link))) { rcopy($target, $link); }
         }
     } catch (Throwable $e) {
         return 'Placed files, but wiring assets failed: ' . $e->getMessage();
