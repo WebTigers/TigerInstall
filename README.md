@@ -3,10 +3,35 @@
 **The one-file web installer for [Tiger](https://github.com/WebTigers/Tiger)** — install a modern,
 multi-tenant CMS/SaaS platform on shared cPanel hosting with **no shell and no Composer**.
 
-Download **one file**, drop it in your website's document root, open it in a browser. That's it.
+## Download
+
+**[⬇ tiger-install.zip](https://github.com/WebTigers/TigerInstall/releases/latest/download/tiger-install.zip)**
+— always the current release.
 
 ```
-public_html/tiger-install.php   →   open https://yourdomain.com/tiger-install.php
+https://github.com/WebTigers/TigerInstall/releases/latest/download/tiger-install.zip
+```
+
+Then, in cPanel:
+
+1. **File Manager** → open your domain's document root (`public_html`).
+2. **Upload** `tiger-install.zip`.
+3. Select it → **Extract**.
+4. Open `https://yourdomain.com/tiger-install.php` in your browser.
+
+That's it — the installer takes over from there, and deletes itself when it's done.
+
+> **Why a zip rather than a bare `.php`?** Upload-then-extract is the native cPanel motion, a zip
+> survives the trip without a browser trying to render or rename it, and "download this loose script
+> and drop it in your web root" is a habit worth not teaching. Each release also publishes a
+> `tiger-install.zip.sha256` if you want to verify the download before extracting.
+
+Prefer the command line, or already have shell access?
+
+```bash
+cd ~/public_html
+curl -LO https://github.com/WebTigers/TigerInstall/releases/latest/download/tiger-install.zip
+unzip tiger-install.zip
 ```
 
 ## What it does (and why it's safer than WordPress)
@@ -47,16 +72,19 @@ independent install**:
 Upload the installer into a given domain's document root and it detects that domain automatically,
 defaulting the app folder to `/home/user/<domain>/tiger-app` (editable). Repeat per domain.
 
-## Evergreen — one file, never changes
+## Evergreen — the download never goes stale
 
-This installer is **not** rebuilt per Tiger release. It resolves the **latest** Tiger release at
-runtime and installs it. One permanent URL, forever:
+The installer is **not** rebuilt for each Tiger release: it resolves the **latest** Tiger release at
+runtime and installs that. And the download link above is a `releases/latest` URL, so it always
+serves the current installer without the URL ever changing.
+
+To pin a specific Tiger version, add `?version=<tag>` when you open the installer in your browser.
+
+To pin a specific *installer* build, download from a tagged release instead of `latest`:
 
 ```
-https://raw.githubusercontent.com/WebTigers/TigerInstall/main/tiger-install.php
+https://github.com/WebTigers/TigerInstall/releases/download/v1.0.2/tiger-install.zip
 ```
-
-To pin a specific version, add `?version=<tag>` when you open it.
 
 ## Requirements
 
