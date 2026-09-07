@@ -456,8 +456,17 @@ function do_provision($bag) {
         require_once $appDir . '/vendor/autoload.php';
         Tiger_Install::provisionSecrets($iniPath);
         ensure_booted($appDir);
-        $paths = [TIGER_CORE_PATH . '/migrations', APPLICATION_PATH . '/migrations'];
-        foreach (glob(MODULES_PATH . '/*/migrations') ?: [] as $m) { $paths[] = $m; }
+        // ONE authority for the migration scan — the same helper `bin/tiger migrate` and the module
+        // installer use, so a browser install applies BUNDLED tiger-core module migrations too (this
+        // hand-rolled scan only saw application/modules, stranding e.g. the agent module's
+        // agent_attachment table). Guarded for older bundles that predate the public helper.
+        if (method_exists('Tiger_Module_Installer', 'migrationPaths')) {
+            $paths = Tiger_Module_Installer::migrationPaths();
+        } else {
+            $paths = [TIGER_CORE_PATH . '/migrations', APPLICATION_PATH . '/migrations'];
+            foreach (glob(MODULES_PATH . '/*/migrations') ?: [] as $m) { $paths[] = $m; }
+            foreach (glob(TIGER_CORE_PATH . '/modules/*/migrations') ?: [] as $m) { $paths[] = $m; }
+        }
         (new Tiger_Db_Migrator(Zend_Db_Table_Abstract::getDefaultAdapter(), $paths))->migrate(function ($l) {});
     } catch (Throwable $e) {
         return 'Database setup failed: ' . $e->getMessage();
