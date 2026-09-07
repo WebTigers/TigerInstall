@@ -77,9 +77,16 @@ screen verifies all of this and tells you what to toggle in cPanel. Full detail:
 ## Status
 
 > **Beta.** This installer targets the **vendored full-app release bundle** (`tiger-<version>.zip` +
-> `.sha256`) attached to [`WebTigers/tiger`](https://github.com/WebTigers) releases. Until that release
-> artifact is published, use the **manual upload** path the installer offers, or the Composer install
-> (`composer create-project webtigers/tiger my-app --stability=beta`).
+> `.sha256`) attached to [`WebTigers/Tiger`](https://github.com/WebTigers/Tiger) releases. That bundle
+> **is now published** — the installer resolves the latest release at runtime, so no manual step is
+> needed. The **manual upload** path remains available for an air-gapped or pinned install, and
+> Composer still works where you have a shell:
+>
+> ```bash
+> composer create-project webtigers/tiger my-app
+> ```
+>
+> (The `--stability=beta` flag is no longer needed — the skeleton publishes stable tags.)
 
 ## License
 
