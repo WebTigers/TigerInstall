@@ -1,2 +1,8 @@
 .idea/
 .DS_Store
+
+# Build artifacts — produced by .github/workflows/release-assets.yml on release and
+# attached to the GitHub release. NEVER committed: a checked-in copy is what let the
+# zip drift from tiger-install.php, and shipped a release reporting the wrong version.
+tiger-install.zip
+tiger-install.zip.sha256

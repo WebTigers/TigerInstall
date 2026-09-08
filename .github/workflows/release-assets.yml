@@ -1,0 +1,89 @@
+# .github/workflows/release-assets.yml — lives in WebTigers/TigerInstall
+#
+# On every published release, build tiger-install.zip from the CURRENT tiger-install.php, checksum it,
+# and attach all three assets. This exists because the zip was hand-built: it drifted from the .php
+# more than once, and a release shipped reporting the wrong INSTALLER_VERSION because the constant was
+# never bumped. Both are now caught here rather than by a user.
+#
+# Manual / backfill runs: Actions -> this workflow -> "Run workflow" with a tag input.
+name: Release assets
+
+on:
+  release:
+    # `published` fires once for full OR pre-releases; `released`/`prereleased` are not reliably fired
+    # by `gh release create`. Same reasoning as the skeleton's release-bundle workflow.
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to (re)build assets for (e.g. v1.0.3)"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-assets-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  assets:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve the release tag
+        id: tag
+        run: echo "tag=${{ github.event.release.tag_name || inputs.tag }}" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the installer at the tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+
+      - name: Lint
+        run: php -l tiger-install.php
+
+      - name: The reported version must match the tag
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          WANT="${TAG#v}"
+          HAVE=$(php -r '
+            $s = file_get_contents("tiger-install.php");
+            preg_match("/INSTALLER_VERSION\s*=\s*.([0-9][^\x27\"]*)/", $s, $m);
+            echo $m[1] ?? "";
+          ')
+          echo "tag=$WANT  INSTALLER_VERSION=$HAVE"
+          # v1.0.1 shipped reporting 1.0.0 because this was never checked. It is checked now.
+          [ "$WANT" = "$HAVE" ] || { echo "::error::INSTALLER_VERSION ($HAVE) does not match the tag ($WANT) — bump the constant."; exit 1; }
+
+      - name: Build the zip + checksum
+        run: |
+          rm -f tiger-install.zip tiger-install.zip.sha256
+          zip -q tiger-install.zip tiger-install.php
+          sha256sum tiger-install.zip > tiger-install.zip.sha256
+          # The zip must contain exactly the file we just linted, byte for byte.
+          unzip -p tiger-install.zip tiger-install.php | cmp - tiger-install.php \
+            || { echo "::error::zip contents differ from tiger-install.php"; exit 1; }
+          cat tiger-install.zip.sha256
+
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ steps.tag.outputs.tag }}" \
+            tiger-install.php tiger-install.zip tiger-install.zip.sha256 \
+            --clobber -R "${{ github.repository }}"
+
+      - name: Summary
+        run: |
+          {
+            echo "### Attached installer assets to \`${{ steps.tag.outputs.tag }}\`"
+            echo ""
+            echo '```'
+            cat tiger-install.zip.sha256
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
