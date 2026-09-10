@@ -29,7 +29,7 @@ error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
 @ini_set('display_errors', '1');
 @set_time_limit(0);
 
-const INSTALLER_VERSION = '1.0.2';
+const INSTALLER_VERSION = '1.0.3';
 const RELEASE_REPO      = 'webtigers/tiger';   // the skeleton repo whose releases host the full-app bundle
 const MIN_PHP           = '8.1.0';
 const GH_API            = 'https://api.github.com';
@@ -161,6 +161,67 @@ function rcopy($src, $dst) {
 /* ---------------------------------------------------------------------------
  * Preflight
  * ------------------------------------------------------------------------- */
+
+/**
+ * Merge the tiger.db.* keys into an existing local.ini, PRESERVING every other line.
+ *
+ * The installer used to rebuild this file from scratch on each call, which destroyed whatever was
+ * already in it — including `tiger.crypto.key` and `tiger.security.pepper`. Tiger_Install::
+ * provisionSecrets() then minted REPLACEMENTS, because it generates a secret whenever the key is
+ * absent. do_provision() runs on BOTH the admin and the finish step, so a back/forward or a retry
+ * rotated the pepper *after* the owner account had been hashed with the old one — locking the
+ * operator out of the site they had just installed. Merging makes the routine idempotent in fact,
+ * which its docblock already claimed.
+ *
+ * @param string $path the local.ini path (may not exist yet)
+ * @param array  $db   key => value, e.g. ['tiger.db.dbname' => 'foo']
+ * @return string the full file text to write
+ */
+function local_ini_merge_db($path, array $db) {
+    $text = is_file($path) ? (string) @file_get_contents($path) : '';
+    if (trim($text) === '') { $text = "[production]\n"; }
+    foreach ($db as $key => $val) {
+        $line = $key . ' = "' . $val . '"';
+        $pat  = '/^[ \t]*' . preg_quote($key, '/') . '[ \t]*=.*$/m';
+        if (preg_match($pat, $text)) {
+            $text = preg_replace($pat, $line, $text, 1);
+            continue;
+        }
+        if (preg_match('/^\[production\][ \t]*\r?\n/m', $text, $m, PREG_OFFSET_CAPTURE)) {
+            $at   = $m[0][1] + strlen($m[0][0]);
+            $text = substr($text, 0, $at) . $line . "\n" . substr($text, $at);
+        } else {
+            $text = rtrim($text, "\n") . "\n" . $line . "\n";
+        }
+    }
+    return $text;
+}
+
+/** The value of a single key already in local.ini, or '' — used to tell a retry from a live app. */
+function local_ini_value($path, $key) {
+    if (!is_file($path)) { return ''; }
+    $text = (string) @file_get_contents($path);
+    if (preg_match('/^[ \t]*' . preg_quote($key, '/') . '[ \t]*=[ \t]*"?([^"\r\n]*)"?/m', $text, $m)) {
+        return trim($m[1]);
+    }
+    return '';
+}
+
+/**
+ * Write a file atomically, and REPORT failure instead of swallowing it. Temp-then-rename, so a
+ * failed write can never leave a half-written config (and never loses the previous one).
+ *
+ * @return bool true on success
+ */
+function write_file_checked($path, $text, $mode = 0600) {
+    $dir = dirname($path);
+    if (!is_dir($dir) && !@mkdir($dir, 0755, true)) { return false; }
+    $tmp = $path . '.tmp-' . bin2hex(random_bytes(4));
+    if (@file_put_contents($tmp, $text) === false) { @unlink($tmp); return false; }
+    @chmod($tmp, $mode);
+    if (!@rename($tmp, $path)) { @unlink($tmp); return false; }
+    return true;
+}
 
 function preflight($docroot, $home) {
     $checks = [];
@@ -379,13 +440,25 @@ function do_install_files($bag, $home) {
     } else {
         list($tag, $zipUrl, $shaUrl, $rerr) = resolve_release(req('version', ''));
         if ($rerr) { return $rerr; }
+        // Fail CLOSED. Verification used to be skipped entirely when the release carried no
+        // .sha256 asset, and skipped again when the fetch came back empty (the `if ($expected …)`
+        // short-circuited), so exactly the release/download failures the digest exists to catch
+        // were the ones that sailed through unverified. An automatic download now REQUIRES a
+        // well-formed digest that matches, and stops before extraction otherwise. A manual upload
+        // is a separate, explicit trust decision and is not checked here.
+        if (!$shaUrl) {
+            return 'That release has no .sha256 checksum to verify the download against. Aborting — '
+                 . 'download the ZIP yourself and use the manual upload below if you trust it.';
+        }
         if (!http_download($zipUrl, $zipPath)) { return 'Download failed. Try the manual upload below.'; }
-        if ($shaUrl) {
-            list($shaBody,) = http_get($shaUrl);
-            $expected = $shaBody ? strtolower(trim(preg_split('/\s+/', trim($shaBody))[0])) : '';
-            if ($expected && !hash_equals($expected, strtolower(hash_file('sha256', $zipPath)))) {
-                return 'Checksum mismatch — the download may be corrupt or tampered. Aborting.';
-            }
+        list($shaBody,) = http_get($shaUrl);
+        $expected = $shaBody ? strtolower(trim(preg_split('/\s+/', trim((string) $shaBody))[0])) : '';
+        if (!preg_match('/^[0-9a-f]{64}$/', $expected)) {
+            return 'Could not fetch a valid checksum for the download. Aborting before install — '
+                 . 'retry, or use the manual upload below.';
+        }
+        if (!hash_equals($expected, strtolower(hash_file('sha256', $zipPath)))) {
+            return 'Checksum mismatch — the download may be corrupt or tampered. Aborting.';
         }
     }
     if (!is_file($zipPath)) { return 'No bundle to install — please upload the ZIP.'; }
@@ -451,15 +524,31 @@ function do_provision($bag) {
     } catch (Throwable $e) {
         return 'Could not connect to the database: ' . $e->getMessage();
     }
-    $ini = "[production]\n"
-         . 'tiger.db.host = "' . $dbHost . "\"\n"
-         . 'tiger.db.dbname = "' . $dbName . "\"\n"
-         . 'tiger.db.username = "' . $dbUser . "\"\n"
-         . 'tiger.db.password = "' . $dbPass . "\"\n"
-         . 'tiger.db.charset = "utf8mb4"' . "\n";
     $iniPath = $appDir . '/application/configs/local.ini';
-    @file_put_contents($iniPath, $ini);
-    @chmod($iniPath, 0600);
+
+    // Refuse to repoint a DIFFERENT, already-configured app. A resume/retry submits the SAME
+    // database that is already in the file, so it passes; pointing the wizard at a live install
+    // and typing new credentials does not. do_install_files()'s own guard misses this case: it
+    // returns success early when vendor/autoload.php exists, before it ever reads local.ini.
+    $existingDb = local_ini_value($iniPath, 'tiger.db.dbname');
+    if ($existingDb !== '' && strcasecmp($existingDb, $dbName) !== 0) {
+        return 'This app folder is already configured for database "' . $existingDb . '". Refusing to '
+             . 'repoint an existing installation at "' . $dbName . '" — edit application/configs/local.ini '
+             . 'by hand if that is really what you want.';
+    }
+
+    // MERGE, never replace: this file also holds tiger.crypto.key and tiger.security.pepper by the
+    // time we run a second time, and rewriting it wholesale threw them away (see local_ini_merge_db).
+    $ini = local_ini_merge_db($iniPath, [
+        'tiger.db.host'     => $dbHost,
+        'tiger.db.dbname'   => $dbName,
+        'tiger.db.username' => $dbUser,
+        'tiger.db.password' => $dbPass,
+        'tiger.db.charset'  => 'utf8mb4',
+    ]);
+    if (!write_file_checked($iniPath, $ini)) {
+        return 'Could not write ' . $iniPath . ' — check that the folder is writable.';
+    }
     try {
         require_once $appDir . '/vendor/autoload.php';
         Tiger_Install::provisionSecrets($iniPath);
