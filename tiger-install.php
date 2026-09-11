@@ -29,7 +29,7 @@ error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
 @ini_set('display_errors', '1');
 @set_time_limit(0);
 
-const INSTALLER_VERSION = '1.1.0';
+const INSTALLER_VERSION = '1.2.0';
 const RELEASE_REPO      = 'webtigers/tiger';   // the skeleton repo whose releases host the full-app bundle
 const MIN_PHP           = '8.1.0';
 const GH_API            = 'https://api.github.com';
@@ -410,12 +410,14 @@ function db_form($bag, $errNote = '') {
 function admin_form($bag, $errNote = '') {
     return '<h1>Create your admin account</h1>'
         . ($errNote !== '' ? '<div class="note bad">' . h($errNote) . '</div>' : '<div class="note ok">Database installed and ready.</div>')
-        . '<form method="post">' . hidden_bag($bag, ['org', 'email', 'username', 'password', 'agent'])
+        . '<form method="post">' . hidden_bag($bag, ['org', 'email', 'email2', 'username', 'password', 'password2', 'agent'])
         . '<div class="card">'
         . field('Organization name', 'org', 'text', $bag['org'], 'My Company')
         . field('Admin email', 'email', 'email', $bag['email'])
+        . field('Confirm email', 'email2', 'email', $bag['email2'])
         . field('Username (optional)', 'username', 'text', $bag['username'])
         . field('Password (min 8)', 'password', 'password', $bag['password'])
+        . field('Confirm password', 'password2', 'password', $bag['password2'])
         . '<label style="display:flex;gap:9px;align-items:flex-start;margin-top:18px;font-weight:600">'
         . '<input type="checkbox" name="agent" value="1" style="margin-top:4px"' . (truthy($bag['agent']) ? ' checked' : '') . '>'
         . '<span>Let the assistant that installed Tiger manage it'
@@ -601,6 +603,85 @@ function do_provision($bag) {
 }
 
 /** Create the founding org + admin. Returns '' or an error message. */
+/**
+ * Check the admin step's own fields before any expensive work runs.
+ *
+ * A typo in the ONE email address that owns the install is unrecoverable from this screen — the
+ * installer self-deletes, and a password reset goes to the address that was typed wrong. Catching it
+ * here costs a re-type; catching it later costs the account.
+ *
+ * Deliberately only checks what this form can know (presence + the two confirmations match). Password
+ * strength stays Tiger's rule, enforced by createOwner, so there is one authority for it.
+ *
+ * @return string '' when fine, else a message for the user
+ */
+function admin_errors($bag) {
+    if ($bag['email'] === '')                  { return 'Enter an admin email address.'; }
+    if (strcasecmp($bag['email'], $bag['email2']) !== 0) {
+        return 'The two email addresses do not match.';
+    }
+    if ($bag['password'] === '')               { return 'Choose a password.'; }
+    if (!hash_equals($bag['password'], $bag['password2'])) {
+        return 'The two passwords do not match.';
+    }
+    return '';
+}
+
+/**
+ * The credentials the user must keep, as a downloadable file.
+ *
+ * The installer DELETES ITSELF on success, so this screen is the only moment these values exist in one
+ * place — the DB password afterwards lives only in local.ini above the docroot, and the agent key is
+ * shown exactly once and never again. A user who closes this tab has lost them.
+ *
+ * Served as a `data:` URI on a normal <a download>, which means NO JavaScript and, more importantly,
+ * nothing sensitive is ever written to the server. Writing this file into the docroot would publish
+ * every secret in the install to anyone who guessed the filename; a file that never exists on disk
+ * cannot be fetched, and cannot be left behind when the installer removes itself.
+ */
+function credentials_file($bag, $base, $agent) {
+    $L = function ($k, $v) { return $v === '' || $v === null ? '' : sprintf("%-16s %s\n", $k, $v); };
+
+    $t  = "Tiger — installation credentials\n";
+    $t .= "================================\n";
+    $t .= "Saved " . gmdate('Y-m-d H:i') . " UTC by tiger-install " . INSTALLER_VERSION . "\n\n";
+    $t .= "THIS FILE CONTAINS PASSWORDS. Store it somewhere private — a password manager,\n";
+    $t .= "not your Downloads folder. Anyone holding it can take over the site.\n\n";
+
+    $t .= "SITE\n";
+    $t .= $L('Site', $base . '/');
+    $t .= $L('Sign in', $base . '/login');
+    $t .= $L('Admin', $base . '/admin');
+    $t .= "\nADMIN ACCOUNT\n";
+    $t .= $L('Organization', $bag['org']);
+    $t .= $L('Email', $bag['email']);
+    $t .= $L('Username', $bag['username'] !== '' ? $bag['username'] : '(email is the login)');
+    $t .= $L('Password', $bag['password']);
+    $t .= "\nDATABASE\n";
+    $t .= $L('Host', $bag['db_host']);
+    $t .= $L('Name', $bag['db_name']);
+    $t .= $L('User', $bag['db_user']);
+    $t .= $L('Password', $bag['db_pass']);
+    $t .= "\nPATHS\n";
+    $t .= $L('Application', $bag['app_dir']);
+    $t .= $L('Config', $bag['app_dir'] . '/application/configs/local.ini');
+    $t .= $L('Document root', $bag['docroot']);
+
+    if (!empty($agent['ok'])) {
+        $t .= "\nAGENT ACCESS (MCP)\n";
+        $t .= $L('Endpoint', $base . '/mcp');
+        $t .= $L('Access key', $agent['token']);
+        $t .= $L('Scope', implode(', ', $agent['modules']) . ' — this organization only');
+        $t .= $L('Manage/revoke', $base . '/mcp/admin');
+        $t .= "\nThe access key is shown once and cannot be retrieved later. If it leaks, revoke it\n";
+        $t .= "at /mcp/admin and mint a new one — the site itself is unaffected.\n";
+    }
+
+    $t .= "\nThe database password also lives in local.ini above your document root. The admin\n";
+    $t .= "password is not stored anywhere in readable form — if you lose it, reset it by email.\n";
+    return $t;
+}
+
 function do_create_owner($bag, &$owner = null) {
     try {
         ensure_booted($bag['app_dir']);
@@ -672,7 +753,7 @@ $step    = req('step', 'welcome');
 
 // The value bag — read every field each request; fill sensible defaults once.
 $bag = [];
-foreach (['app_dir', 'docroot', 'db_host', 'db_name', 'db_user', 'db_pass', 'org', 'email', 'username', 'password', 'agent'] as $f) {
+foreach (['app_dir', 'docroot', 'db_host', 'db_name', 'db_user', 'db_pass', 'org', 'email', 'email2', 'username', 'password', 'password2', 'agent'] as $f) {
     $bag[$f] = post($f, '');
 }
 // `agent` may be SEEDED from the query string (?agent=1) but only on a GET. On a POST the visible
@@ -774,11 +855,21 @@ case 'admin':
          'fields' => ['db_host', 'db_name', 'db_user', 'db_pass']]); break; }
     page('Admin', steps_nav('admin') . admin_form($bag),
         ['installer' => INSTALLER_VERSION, 'step' => 'admin', 'status' => 'awaiting-input', 'next_step' => 'finish',
-         'fields' => ['org', 'email', 'username', 'password', 'agent'], 'agent_requested' => $agentWanted]);
+         'fields' => ['org', 'email', 'email2', 'username', 'password', 'password2', 'agent'], 'agent_requested' => $agentWanted]);
     break;
 
 /* --- Finish — create the admin, self-delete ----------------------------- */
 case 'finish':
+    // Cheap, local checks before the slow work — nobody should wait through a download and a
+    // migration only to be told they mistyped their own email.
+    $err = admin_errors($bag);
+    if ($err !== '') {
+        page('Admin', steps_nav('admin') . admin_form($bag, $err),
+            ['installer' => INSTALLER_VERSION, 'step' => 'admin', 'status' => 'error', 'error' => 'admin_fields_invalid',
+             'detail' => $err, 'fields' => ['org', 'email', 'email2', 'username', 'password', 'password2', 'agent'],
+             'agent_requested' => $agentWanted]);
+        break;
+    }
     $err = do_install_files($bag, $home);
     if ($err !== '') { page('Download', steps_nav('download') . download_error($bag, $err),
         ['installer' => INSTALLER_VERSION, 'step' => 'download', 'status' => 'error', 'error' => 'download_failed', 'detail' => $err]); break; }
@@ -790,7 +881,7 @@ case 'finish':
     $err = do_create_owner($bag, $owner);
     if ($err !== '') { page('Admin', steps_nav('admin') . admin_form($bag, $err),
         ['installer' => INSTALLER_VERSION, 'step' => 'admin', 'status' => 'error', 'error' => 'owner_failed', 'detail' => $err,
-         'fields' => ['org', 'email', 'username', 'password', 'agent'], 'agent_requested' => $agentWanted]); break; }
+         'fields' => ['org', 'email', 'email2', 'username', 'password', 'password2', 'agent'], 'agent_requested' => $agentWanted]); break; }
 
     // TIGER-90 — only now: the owner exists, so the credential has someone to belong to.
     $agent = $agentWanted ? do_enable_agent($bag, $owner) : ['ok' => false, 'error' => ''];
@@ -834,6 +925,18 @@ case 'finish':
         $body .= '<div class="note"><strong>Using an AI assistant?</strong> The <code>/mcp</code> endpoint is off. '
             . 'Turn it on and mint a scoped key at <code>' . h($base) . '/mcp/admin</code>, then reconnect your assistant.</div>';
     }
+
+    // One file with everything, generated in-page so no secret is ever written to the server.
+    $credText = credentials_file($bag, $base, $agentWanted ? $agent : ['ok' => false]);
+    $credName = 'tiger-credentials-' . preg_replace('/[^a-z0-9.-]/i', '-', $domain) . '-' . gmdate('Ymd') . '.txt';
+    $body .= '<div class="card"><h2>&#128190; Save your credentials</h2>'
+        . '<p class="mut">One file with your admin login, database details, paths'
+        . ($agentWanted && !empty($agent['ok']) ? ' and the agent access key' : '')
+        . '. <strong>This installer deletes itself</strong>, so this is the only time these appear together.</p>'
+        . '<a class="btn" download="' . h($credName) . '" href="data:text/plain;charset=utf-8;base64,'
+        . base64_encode($credText) . '"><i class="fa-solid fa-download"></i>Download credentials</a>'
+        . '<div class="note">It contains passwords. Put it in a password manager, not your Downloads folder.</div>'
+        . '</div>';
 
     page('Done', $body, [
         'installer'    => INSTALLER_VERSION,
