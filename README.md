@@ -186,6 +186,27 @@ screen verifies all of this and tells you what to toggle in cPanel. Full detail:
 >
 > (The `--stability=beta` flag is no longer needed — the skeleton publishes stable tags.)
 
+## Development
+
+```
+php tests/run.php
+```
+
+No dependencies — the same command CI runs. Three files:
+
+| | |
+|---|---|
+| `tests/invariants.php` | properties that must never regress: one file with no dependencies of its own, **no callback/webhook field of any kind**, outbound calls only to the pinned release URLs, no shell functions (a shared host has no shell), a required checksum, self-deletion |
+| `tests/wizard.php` | the agent checkbox — rendered, unticked by default, reversible, never also a hidden input — and the machine-readable state block, including that a `<` in the payload cannot break out of the script element |
+| `tests/smoke.php` | serves the installer and reads its state block back, proving it runs and reports where it is |
+
+The wizard tests lift the real seeding logic out of the shipped file at run time rather than copying
+it, so a test cannot quietly drift from the code it covers.
+
+CI lints on **PHP 8.1 through 8.5** — the range a cPanel host is likely to offer. A parse error on a
+customer's PHP version is the worst failure this repo has: a blank page on their own server, mid-install,
+with no way to debug it.
+
 ## License
 
 BSD-3-Clause © WebTigers. "Tiger" and "WebTigers" are trademarks of WebTigers. See [LICENSE](LICENSE).
