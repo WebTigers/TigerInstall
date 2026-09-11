@@ -86,6 +86,76 @@ To pin a specific *installer* build, download from a tagged release instead of `
 https://github.com/WebTigers/TigerInstall/releases/download/v1.0.2/tiger-install.zip
 ```
 
+## Driving the installer from an AI client
+
+The wizard is a plain HTML form flow with no JavaScript requirement, so any browser-aware client can
+fill and submit it exactly as a person does. Two things make that reliable rather than a scraping
+exercise.
+
+### 1. Machine-readable state on every screen
+
+Every page carries a JSON block. Read it instead of the prose:
+
+```html
+<script type="application/json" id="tiger-install-state">{ ... }</script>
+```
+
+| Field | Meaning |
+|---|---|
+| `installer` | installer version |
+| `step` | `requirements` · `location` · `download` · `database` · `admin` · `finish` · `expired` |
+| `status` | `awaiting-input` · `blocked` · `error` · `ok` |
+| `next_step` | the `step` value to post next, when the screen is waiting on input |
+| `fields` | the field names this screen expects |
+| `error` / `detail` | a stable error slug plus the human message, when `status` is `error` |
+| `checks` | requirements only: each check with `ok`, `required`, and a `fix` when failing |
+
+`status` alone answers "did that work?" — `blocked` means an unmet requirement the user must fix,
+`error` means the step can be retried, `ok` appears only on `finish`.
+
+Retrying is safe and needs no re-upload; the file only deletes itself **after** the owner is created.
+Every error path stops before that.
+
+### 2. The connect handshake — how a client gets a credential
+
+A fresh Tiger is deliberately unreachable by an agent: `/mcp` is off and a scoped token is normally
+minted by an authenticated admin. The installer's finish step is the one moment a human is present,
+authenticated, and making a deliberate choice — so that is where the credential is handed out.
+
+**Tick "Let the assistant that installed Tiger manage it"** on the admin step. The checkbox can be
+pre-ticked with `?agent=1` on the installer URL, but it is always **visible before you submit and can
+be turned off** — a seeded choice you can see and reverse, never a silent one.
+
+On success the finish screen shows the key once, and the state block carries it:
+
+```json
+{
+  "step": "finish",
+  "status": "ok",
+  "site": "https://example.com/",
+  "agent": {
+    "enabled": true,
+    "endpoint": "https://example.com/mcp",
+    "token": "tgr_…",
+    "manage": "https://example.com/mcp/admin",
+    "scope": { "modules": ["cms","blog","media","search","docs"], "org_scoped": true, "read_only": false }
+  }
+}
+```
+
+If the box was not ticked, `agent.enabled` is `false` with `reason: "not_requested"` — degrade to
+telling the user to enable it at `/mcp/admin` and reconnect, rather than failing.
+
+**There is no callback URL, and one must never be added.** The key is displayed on the installer's own
+screen and nowhere else. A client that drove the install drove the browser — it filled in the database
+and admin forms, so it can read the finish page. A callback would solve nothing while turning a shared
+installer link into credential phishing: installer links travel by being shared, and `?callback=` would
+let a stranger receive a token to a site someone else legitimately installed. That is why the enable
+param is safe and a callback is not.
+
+The token is a normal scoped MCP credential: visible, revocable, and re-mintable at `/mcp/admin`, and
+never more than the owner's own permissions allow.
+
 ## Requirements
 
 Shared cPanel hosting with **PHP 8.1+** and the `pdo_mysql`, `zip`, `mbstring`, and
@@ -115,6 +185,27 @@ screen verifies all of this and tells you what to toggle in cPanel. Full detail:
 > ```
 >
 > (The `--stability=beta` flag is no longer needed — the skeleton publishes stable tags.)
+
+## Development
+
+```
+php tests/run.php
+```
+
+No dependencies — the same command CI runs. Three files:
+
+| | |
+|---|---|
+| `tests/invariants.php` | properties that must never regress: one file with no dependencies of its own, **no callback/webhook field of any kind**, outbound calls only to the pinned release URLs, no shell functions (a shared host has no shell), a required checksum, self-deletion |
+| `tests/wizard.php` | the agent checkbox — rendered, unticked by default, reversible, never also a hidden input — and the machine-readable state block, including that a `<` in the payload cannot break out of the script element |
+| `tests/smoke.php` | serves the installer and reads its state block back, proving it runs and reports where it is |
+
+The wizard tests lift the real seeding logic out of the shipped file at run time rather than copying
+it, so a test cannot quietly drift from the code it covers.
+
+CI lints on **PHP 8.1 through 8.5** — the range a cPanel host is likely to offer. A parse error on a
+customer's PHP version is the worst failure this repo has: a blank page on their own server, mid-install,
+with no way to debug it.
 
 ## License
 

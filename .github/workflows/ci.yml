@@ -1,0 +1,77 @@
+name: CI
+
+# tiger-install.php is uploaded BY HAND to someone's shared host and run ONCE, with no shell, no
+# Composer, and no chance to patch it mid-install. Whatever ships is what runs. These checks are the
+# only thing between an edit and that.
+#
+# Shared hosting is the ONLY target — that is why the lint matrix spans every PHP a cPanel host is
+# likely to offer, and why the invariants refuse shell calls and extra dependencies.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # A parse error on a host's PHP version is the worst failure this repo has: the user sees a blank
+  # page on their own server with no way to debug it. Lint on every version they might be running.
+  lint:
+    name: Lint on PHP ${{ matrix.php }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.1', '8.2', '8.3', '8.4', '8.5']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+      - name: Syntax check every PHP file
+        run: |
+          fail=0
+          while IFS= read -r f; do
+            php -l "$f" || fail=1
+          done < <(find . -name '*.php' -not -path './.git/*')
+          exit $fail
+
+  # Run the suite on the floor (what the preflight demands) and the newest (what a good host offers).
+  test:
+    name: Tests on PHP ${{ matrix.php }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.1', '8.5']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+      # No dependencies on purpose — the same `php tests/run.php` a contributor runs locally.
+      - run: php tests/run.php
+
+  # The installer reports its own version, and the README's download link is evergreen, so a tag that
+  # disagrees with INSTALLER_VERSION ships an installer that lies about what it is.
+  version-matches-tag:
+    name: Version matches tag
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VER="$(grep -oE "INSTALLER_VERSION\s*=\s*'[^']+'" tiger-install.php | grep -oE "'[^']+'" | tr -d "'")"
+          echo "tag=$TAG  INSTALLER_VERSION=$VER"
+          if [ "$TAG" != "$VER" ]; then
+            echo "::error file=tiger-install.php::INSTALLER_VERSION ($VER) does not match the release tag ($TAG)."
+            exit 1
+          fi
+          echo "✓ matches."
