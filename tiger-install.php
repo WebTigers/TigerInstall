@@ -29,7 +29,7 @@ error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
 @ini_set('display_errors', '1');
 @set_time_limit(0);
 
-const INSTALLER_VERSION = '1.0.3';
+const INSTALLER_VERSION = '1.1.0';
 const RELEASE_REPO      = 'webtigers/tiger';   // the skeleton repo whose releases host the full-app bundle
 const MIN_PHP           = '8.1.0';
 const GH_API            = 'https://api.github.com';
@@ -50,6 +50,9 @@ $GLOBALS['__csrf'] = $__csrf;
 function h($s) { return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8'); }
 function post($k, $d = '') { return isset($_POST[$k]) ? trim((string) $_POST[$k]) : $d; }
 function req($k, $d = '') { return isset($_REQUEST[$k]) ? trim((string) $_REQUEST[$k]) : $d; }
+
+/** Checkbox/flag truthiness — '1', 'true', 'yes', 'on' are on; everything else (incl. '0') is off. */
+function truthy($v) { return in_array(strtolower(trim((string) $v)), ['1', 'true', 'yes', 'on'], true); }
 
 /** The per-visitor CSRF token (a same-site cookie; see the top of the file). */
 function csrf_token() {
@@ -299,7 +302,27 @@ function resolve_release($version = '') {
  * Rendering
  * ------------------------------------------------------------------------- */
 
-function page($title, $body) {
+/**
+ * The machine-readable state block (TIGER-89/90).
+ *
+ * Every screen carries one, so a browser-aware client can tell where it is and whether the last action
+ * worked WITHOUT scraping prose — the acceptance bar in TIGER-89 ("determine success or the specific
+ * failure without human interpretation"). It is also how the client reads the agent credential minted at
+ * finish (TIGER-90), so there is ONE contract to learn rather than a separate mechanism per question.
+ *
+ * A <script type="application/json"> block, not a <meta>: it holds structure (scope, URLs, field lists)
+ * that does not fit an attribute, it is inert to the browser, and it is trivially readable by anything
+ * that can already see the DOM it just filled in.
+ */
+function state_block(array $state) {
+    if (!$state) { return ''; }
+    $json = json_encode($state, JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
+    // </script> can never appear inside a JSON string here, but belt-and-braces for embedded content.
+    $json = str_replace('<', '\u003C', (string) $json);
+    return '<script type="application/json" id="tiger-install-state">' . $json . '</script>';
+}
+
+function page($title, $body, array $state = []) {
     $csrf = csrf_token();
     echo '<!doctype html><html lang="en"><head><meta charset="utf-8">'
        . '<meta name="viewport" content="width=device-width, initial-scale=1">'
@@ -322,6 +345,7 @@ function page($title, $body) {
        . 'ol.steps{counter-reset:s;list-style:none;padding:0;display:flex;gap:8px;flex-wrap:wrap;margin:0 0 8px}ol.steps li{color:var(--mut);font-size:.8rem}'
        . 'ol.steps li.on{color:var(--brand);font-weight:700}'
        . '</style></head><body><div class="wrap">'
+       . state_block($state)
        . '<div class="brand"><span style="font-size:1.4rem">&#128062;</span> Tiger Installer <span class="mut" style="font-weight:400">v' . INSTALLER_VERSION . '</span></div>'
        . $body
        . '<p class="mut" style="margin-top:28px;font-size:.8rem">One file, nothing more. Downloads &amp; verifies the latest Tiger release, installs it above your document root, then deletes itself.</p>'
@@ -386,12 +410,17 @@ function db_form($bag, $errNote = '') {
 function admin_form($bag, $errNote = '') {
     return '<h1>Create your admin account</h1>'
         . ($errNote !== '' ? '<div class="note bad">' . h($errNote) . '</div>' : '<div class="note ok">Database installed and ready.</div>')
-        . '<form method="post">' . hidden_bag($bag, ['org', 'email', 'username', 'password'])
+        . '<form method="post">' . hidden_bag($bag, ['org', 'email', 'username', 'password', 'agent'])
         . '<div class="card">'
         . field('Organization name', 'org', 'text', $bag['org'], 'My Company')
         . field('Admin email', 'email', 'email', $bag['email'])
         . field('Username (optional)', 'username', 'text', $bag['username'])
         . field('Password (min 8)', 'password', 'password', $bag['password'])
+        . '<label style="display:flex;gap:9px;align-items:flex-start;margin-top:18px;font-weight:600">'
+        . '<input type="checkbox" name="agent" value="1" style="margin-top:4px"' . (truthy($bag['agent']) ? ' checked' : '') . '>'
+        . '<span>Let the assistant that installed Tiger manage it'
+        . '<br><span class="mut" style="font-weight:400;font-size:.9em">Turns on the <code>/mcp</code> endpoint and shows a scoped access key on the next screen. '
+        . 'You can see and revoke it any time at <code>/mcp/admin</code>. Leave this off if you are installing by hand.</span></span></label>'
         . '</div>' . nav_buttons('database', 'finish', $errNote !== '' ? 'Try again' : 'Finish install') . '</form>';
 }
 
@@ -572,15 +601,61 @@ function do_provision($bag) {
 }
 
 /** Create the founding org + admin. Returns '' or an error message. */
-function do_create_owner($bag) {
+function do_create_owner($bag, &$owner = null) {
     try {
         ensure_booted($bag['app_dir']);
         $username = $bag['username'] !== '' ? $bag['username'] : null;
-        Tiger_Install::createOwner($bag['email'], $bag['password'], $bag['org'], null, 'developer', $username);
+        $owner = Tiger_Install::createOwner($bag['email'], $bag['password'], $bag['org'], null, 'developer', $username);
     } catch (Throwable $e) {
         return $e->getMessage();
     }
     return '';
+}
+
+/**
+ * Mint the agent credential and switch `/mcp` on — TIGER-90, the connect handshake.
+ *
+ * Runs ONLY after do_create_owner() has succeeded: the token is scoped to the owner that was just
+ * created, so there is no ordering in which MCP is reachable before an admin exists to revoke it.
+ *
+ * Within that, mint BEFORE enabling. The ticket requires both to happen after the owner exists and
+ * warns that the reverse order can leave "MCP enabled on a site with no admin"; minting first also
+ * means a failure at the mint step leaves the site on today's defaults (MCP off) rather than on with
+ * no credential to show for it. The safe half-state is the one that grants nothing.
+ *
+ * Failure here NEVER fails the install. The site is already live and the owner already exists; all
+ * that is lost is the convenience, and the finish screen says so plainly.
+ *
+ * Scope: the curated starter set (Tiger_Mcp_Token::DEFAULT_MODULES), org-scoped, not read-only.
+ * `tiger.api.discovery` is deliberately left alone — publishing the OpenAPI document is a separate
+ * decision, and MCP's tools/list already gives the client its typed surface.
+ *
+ * @return array {ok: bool, token?: string, modules?: string[], error?: string}
+ */
+function do_enable_agent($bag, $owner) {
+    try {
+        ensure_booted($bag['app_dir']);
+
+        $userId = is_array($owner) ? ($owner['user_id'] ?? null) : null;
+        $orgId  = is_array($owner) ? ($owner['org_id']  ?? null) : null;
+        if ($userId === null) { return ['ok' => false, 'error' => 'No owner id was returned; agent access not enabled.']; }
+
+        $cred = (new Tiger_Model_UserCredential())->createToken($userId);
+        Tiger_Mcp_Token::saveConfig($cred['credential_id'], [
+            'modules'    => Tiger_Mcp_Token::DEFAULT_MODULES,
+            'read_only'  => false,
+            'org_scoped' => true,
+            'role'       => 'developer',
+            'org_id'     => (string) $orgId,
+        ]);
+
+        // Only now is there a credential to reach it with.
+        (new Tiger_Model_Config())->set(Tiger_Model_Config::SCOPE_GLOBAL, '', Tiger_Mcp::CONFIG_ENABLED, '1');
+
+        return ['ok' => true, 'token' => $cred['token'], 'modules' => Tiger_Mcp_Token::DEFAULT_MODULES];
+    } catch (Throwable $e) {
+        return ['ok' => false, 'error' => $e->getMessage()];
+    }
 }
 
 /* ---------------------------------------------------------------------------
@@ -597,16 +672,30 @@ $step    = req('step', 'welcome');
 
 // The value bag — read every field each request; fill sensible defaults once.
 $bag = [];
-foreach (['app_dir', 'docroot', 'db_host', 'db_name', 'db_user', 'db_pass', 'org', 'email', 'username', 'password'] as $f) {
+foreach (['app_dir', 'docroot', 'db_host', 'db_name', 'db_user', 'db_pass', 'org', 'email', 'username', 'password', 'agent'] as $f) {
     $bag[$f] = post($f, '');
 }
+// `agent` may be SEEDED from the query string (?agent=1) but only on a GET. On a POST the visible
+// checkbox is the only authority, so un-ticking it actually turns it off — an unchecked box submits
+// nothing, which is exactly what makes the seeded choice reversible (TIGER-90).
+//
+// This is safe ONLY because there is no callback: the minted token is displayed on the installer's own
+// screen and nowhere else, so a crafted ?agent=1 link gains its sender nothing — they do not see the
+// screen, the person running the install does. Re-read TIGER-90 before adding any field that would
+// send the credential somewhere.
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    $bag['agent'] = truthy(req('agent', '')) ? '1' : '';
+}
+$agentWanted = truthy($bag['agent']);
 if ($bag['docroot'] === '') { $bag['docroot'] = $docroot; }
 if ($bag['app_dir'] === '') { $bag['app_dir'] = $home . '/' . $domain . '/tiger-app'; }
 if ($bag['db_host'] === '') { $bag['db_host'] = 'localhost'; }
 
 // CSRF gate for every POST.
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && !csrf_ok()) {
-    page('Session expired', '<div class="card"><div class="note bad">This page expired. <a href="?" style="color:var(--brand)">Start over</a>.</div></div>');
+    page('Session expired', '<div class="card"><div class="note bad">This page expired. <a href="?" style="color:var(--brand)">Start over</a>.</div></div>',
+        ['installer' => INSTALLER_VERSION, 'step' => 'expired', 'status' => 'error', 'error' => 'csrf_expired',
+         'detail' => 'The CSRF cookie did not match. Reload the installer and start again.']);
     exit;
 }
 
@@ -633,7 +722,14 @@ default:
     $body .= $blocked
         ? '<div class="note bad">Fix the <strong>FAIL</strong> items in cPanel, then reload this page.</div>'
         : '<form method="post">' . hidden_bag($bag) . nav_buttons('', 'location', 'Continue') . '</form>';
-    page('Requirements', $body);
+    page('Requirements', $body, [
+        'installer' => INSTALLER_VERSION,
+        'step'      => 'requirements',
+        'status'    => $blocked ? 'blocked' : 'awaiting-input',
+        'next_step' => $blocked ? null : 'location',
+        'checks'    => array_map(static fn($c) => ['label' => $c['label'], 'ok' => (bool) $c['ok'],
+                                                   'required' => (bool) $c['hard'], 'fix' => $c['ok'] ? null : $c['fix']], $checks),
+    ]);
     break;
 
 /* --- Location ----------------------------------------------------------- */
@@ -653,33 +749,51 @@ case 'location':
         . '<div class="note">Running several domains on this account? Each gets its own folder like '
         . '<code>' . h($home) . '/&lt;domain&gt;/tiger-app</code> and its own database — fully independent installs.</div>'
         . '</div>' . nav_buttons('welcome', 'database', 'Download & install') . '</form>';
-    page('Location', $body);
+    page('Location', $body, ['installer' => INSTALLER_VERSION, 'step' => 'location', 'status' => 'awaiting-input',
+        'next_step' => 'download', 'fields' => ['app_dir', 'docroot'], 'app_dir' => $bag['app_dir'], 'docroot' => $bag['docroot']]);
     break;
 
 /* --- Database — download+extract on entry, then the DB form ------------- */
 case 'database':
     $err = do_install_files($bag, $home);
-    if ($err !== '') { page('Download', steps_nav('download') . download_error($bag, $err)); break; }
-    page('Database', steps_nav('database') . db_form($bag));
+    if ($err !== '') { page('Download', steps_nav('download') . download_error($bag, $err),
+        ['installer' => INSTALLER_VERSION, 'step' => 'download', 'status' => 'error', 'error' => 'download_failed', 'detail' => $err]); break; }
+    page('Database', steps_nav('database') . db_form($bag),
+        ['installer' => INSTALLER_VERSION, 'step' => 'database', 'status' => 'awaiting-input', 'next_step' => 'admin',
+         'fields' => ['db_host', 'db_name', 'db_user', 'db_pass']]);
     break;
 
 /* --- Admin — provision the DB on entry, then the admin form ------------- */
 case 'admin':
     $err = do_install_files($bag, $home);
-    if ($err !== '') { page('Download', steps_nav('download') . download_error($bag, $err)); break; }
+    if ($err !== '') { page('Download', steps_nav('download') . download_error($bag, $err),
+        ['installer' => INSTALLER_VERSION, 'step' => 'download', 'status' => 'error', 'error' => 'download_failed', 'detail' => $err]); break; }
     $err = do_provision($bag);
-    if ($err !== '') { page('Database', steps_nav('database') . db_form($bag, $err)); break; }
-    page('Admin', steps_nav('admin') . admin_form($bag));
+    if ($err !== '') { page('Database', steps_nav('database') . db_form($bag, $err),
+        ['installer' => INSTALLER_VERSION, 'step' => 'database', 'status' => 'error', 'error' => 'database_failed', 'detail' => $err,
+         'fields' => ['db_host', 'db_name', 'db_user', 'db_pass']]); break; }
+    page('Admin', steps_nav('admin') . admin_form($bag),
+        ['installer' => INSTALLER_VERSION, 'step' => 'admin', 'status' => 'awaiting-input', 'next_step' => 'finish',
+         'fields' => ['org', 'email', 'username', 'password', 'agent'], 'agent_requested' => $agentWanted]);
     break;
 
 /* --- Finish — create the admin, self-delete ----------------------------- */
 case 'finish':
     $err = do_install_files($bag, $home);
-    if ($err !== '') { page('Download', steps_nav('download') . download_error($bag, $err)); break; }
+    if ($err !== '') { page('Download', steps_nav('download') . download_error($bag, $err),
+        ['installer' => INSTALLER_VERSION, 'step' => 'download', 'status' => 'error', 'error' => 'download_failed', 'detail' => $err]); break; }
     $err = do_provision($bag);
-    if ($err !== '') { page('Database', steps_nav('database') . db_form($bag, $err)); break; }
-    $err = do_create_owner($bag);
-    if ($err !== '') { page('Admin', steps_nav('admin') . admin_form($bag, $err)); break; }
+    if ($err !== '') { page('Database', steps_nav('database') . db_form($bag, $err),
+        ['installer' => INSTALLER_VERSION, 'step' => 'database', 'status' => 'error', 'error' => 'database_failed', 'detail' => $err,
+         'fields' => ['db_host', 'db_name', 'db_user', 'db_pass']]); break; }
+    $owner = null;
+    $err = do_create_owner($bag, $owner);
+    if ($err !== '') { page('Admin', steps_nav('admin') . admin_form($bag, $err),
+        ['installer' => INSTALLER_VERSION, 'step' => 'admin', 'status' => 'error', 'error' => 'owner_failed', 'detail' => $err,
+         'fields' => ['org', 'email', 'username', 'password', 'agent'], 'agent_requested' => $agentWanted]); break; }
+
+    // TIGER-90 — only now: the owner exists, so the credential has someone to belong to.
+    $agent = $agentWanted ? do_enable_agent($bag, $owner) : ['ok' => false, 'error' => ''];
 
     @unlink($home . '/.tiger-install-tmp/tiger.zip');
     $deleted = @unlink(__FILE__);
@@ -695,6 +809,55 @@ case 'finish':
         . ($deleted
             ? '<div class="note ok">This installer has deleted itself. Nothing else to clean up.</div>'
             : '<div class="note bad"><strong>Delete this file now.</strong> The installer couldn&rsquo;t remove itself — delete <code>' . h(__FILE__) . '</code> via File Manager/FTP immediately.</div>');
-    page('Done', $body);
+
+    // --- The agent credential, shown once (TIGER-90) -------------------------------------------
+    // The installer self-deletes, so this screen is the ONLY place the user learns the credential
+    // exists. Say where to manage it, not just what it is.
+    if ($agentWanted && !empty($agent['ok'])) {
+        $body .= '<div class="card"><h2>&#129302; Your assistant can manage this site</h2>'
+            . '<p class="mut">Give this key to the assistant that installed Tiger. It is shown <strong>once</strong>. '
+            . 'It reaches ' . h(implode(', ', $agent['modules'])) . ' for this organization only, and it is never more than your own permissions allow.</p>'
+            . '<table>'
+            . '<tr><td class="mut">Endpoint</td><td><code>' . h($base) . '/mcp</code></td></tr>'
+            . '<tr><td class="mut">Access key</td><td><code style="word-break:break-all">' . h($agent['token']) . '</code></td></tr>'
+            . '<tr><td class="mut">Manage / revoke</td><td><a style="color:var(--brand)" target="_blank" rel="noopener" href="' . h($base) . '/mcp/admin">' . h($base) . '/mcp/admin</a></td></tr>'
+            . '</table>'
+            . '<div class="note">Keep it like a password. If it ever leaks, revoke it at <code>/mcp/admin</code> and mint a new one — the site itself is unaffected.</div>'
+            . '</div>';
+    } elseif ($agentWanted) {
+        // Asked for, but the mint failed. The install is fine; only the convenience was lost.
+        $body .= '<div class="note bad"><strong>Agent access was not enabled.</strong> '
+            . h($agent['error'] !== '' ? $agent['error'] : 'The access key could not be created.')
+            . ' Your site is installed and working. Turn it on any time at <code>' . h($base) . '/mcp/admin</code>.</div>';
+    } else {
+        // The majority path for a hand install — a clear next step, not silence.
+        $body .= '<div class="note"><strong>Using an AI assistant?</strong> The <code>/mcp</code> endpoint is off. '
+            . 'Turn it on and mint a scoped key at <code>' . h($base) . '/mcp/admin</code>, then reconnect your assistant.</div>';
+    }
+
+    page('Done', $body, [
+        'installer'    => INSTALLER_VERSION,
+        'step'         => 'finish',
+        'status'       => 'ok',
+        'site'         => $base . '/',
+        'login'        => $base . '/login',
+        'admin'        => $base . '/admin',
+        'app_dir'      => $bag['app_dir'],
+        'self_deleted' => (bool) $deleted,
+        'agent'        => $agentWanted && !empty($agent['ok'])
+            ? [
+                'enabled'  => true,
+                'endpoint' => $base . '/mcp',
+                'token'    => $agent['token'],
+                'manage'   => $base . '/mcp/admin',
+                'scope'    => ['modules' => $agent['modules'], 'org_scoped' => true, 'read_only' => false],
+            ]
+            : [
+                'enabled' => false,
+                'manage'  => $base . '/mcp/admin',
+                'reason'  => $agentWanted ? 'mint_failed' : 'not_requested',
+                'error'   => $agentWanted ? $agent['error'] : null,
+            ],
+    ]);
     break;
 }
