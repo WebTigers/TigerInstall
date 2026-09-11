@@ -1,0 +1,51 @@
+name: Release
+
+# Build and attach the release artifacts on a v* tag, so what people download is produced the same
+# way every time. Assembling this by hand is how a checksum ends up not matching the file it names.
+#
+# The `v*` push also runs CI's `version-matches-tag` job, so a tag can never publish an installer
+# that reports a different version than the tag it shipped under.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'   # the floor the preflight demands
+          coverage: none
+
+      # Never publish something that does not pass its own tests.
+      - name: Test before packaging
+        run: php tests/run.php
+
+      - name: Build the artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp tiger-install.php dist/
+          # zip from inside dist so the archive holds tiger-install.php at its root, with no directory
+          (cd dist && zip -q -X tiger-install.zip tiger-install.php)
+          (cd dist && sha256sum tiger-install.zip > tiger-install.zip.sha256)
+          echo "--- contents ---"; unzip -l dist/tiger-install.zip
+          echo "--- checksum ---"; cat dist/tiger-install.zip.sha256
+          (cd dist && sha256sum -c tiger-install.zip.sha256)
+
+      - name: Attach to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/tiger-install.php
+            dist/tiger-install.zip
+            dist/tiger-install.zip.sha256
+          fail_on_unmatched_files: true
