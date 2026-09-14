@@ -29,7 +29,7 @@ error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
 @ini_set('display_errors', '1');
 @set_time_limit(0);
 
-const INSTALLER_VERSION = '1.2.0';
+const INSTALLER_VERSION = '1.2.1';
 const RELEASE_REPO      = 'webtigers/tiger';   // the skeleton repo whose releases host the full-app bundle
 const MIN_PHP           = '8.1.0';
 const GH_API            = 'https://api.github.com';
@@ -598,6 +598,12 @@ function do_provision($bag) {
         (new Tiger_Db_Migrator(Zend_Db_Table_Abstract::getDefaultAdapter(), $paths))->migrate(function ($l) {});
     } catch (Throwable $e) {
         return 'Database setup failed: ' . $e->getMessage();
+    }
+    // Every bundled module's assets into public/_modules — the same step `tiger migrate` runs on a
+    // shell host. Without it a fresh no-shell install served every module's JS as a 404 until someone
+    // ran module:activate for each (TIGER-123). Older cores lack the method; fine, nothing to do.
+    if (method_exists('Tiger_Module_Installer', 'publishAllAssets')) {
+        try { Tiger_Module_Installer::publishAllAssets(); } catch (Throwable $e) { /* best-effort */ }
     }
     return '';
 }
