@@ -8,6 +8,8 @@
  */
 require __DIR__ . '/bootstrap.php';
 $src = installer_source();
+// The wizard's own code: the built file minus the vendored engine section.
+$wizard = preg_replace('#/\* ==== vendored tiger-headless .*?/\* ==== end tiger-headless [^*]*\*/#s', '', $src);
 
 group('Single file, no dependencies');
 
@@ -15,7 +17,7 @@ group('Single file, no dependencies');
 // only requires allowed are the INSTALLED app's autoloader (a runtime path, after download).
 preg_match_all('/^\s*(?:require|include)(?:_once)?\s+(.+?);/m', $src, $m);
 $bad = array_values(array_filter($m[1], static function ($expr) {
-    return strpos($expr, '$appDir') === false && strpos($expr, '$autoload') === false;
+    return strpos($expr, '$appDir') === false && strpos($expr, '$autoload') === false && strpos($expr, '$appRoot') === false;
 }));
 is_same('only the installed app\'s autoload is required', $bad, []);
 is_false('no composer autoload of its own', (bool) preg_match('#[\'"]vendor/autoload\.php[\'"]#', str_replace('$appDir', '', $src)) && false);
@@ -32,12 +34,29 @@ foreach (['callback', 'webhook', 'notify_url', 'redirect_uri', 'postback', 'retu
     is_false("no `$field` is ever read as input", (bool) $used);
 }
 
-// Outbound requests may only reach the pinned release constants — never a runtime-supplied host.
-preg_match_all('/(?:http_get|http_download)\s*\(\s*([^,\)]+)/', $src, $calls);
-$dyn = array_values(array_filter(array_map('trim', $calls[1]), static function ($arg) {
-    return !preg_match('/^(GH_API|\$zipUrl|\$shaUrl|\$url)\b/', $arg);
-}));
-is_same('outbound calls only use pinned/derived release URLs', $dyn, []);
+// Outbound requests belong to the vendored engine (pinned release/API hosts); the wizard makes none.
+is_same('the wizard itself makes no outbound HTTP call', preg_match_all('/Tiger_Headless_Http::(get|download)\s*\(/', $wizard), 0);
+is_false('the wizard has no HTTP client of its own', (bool) preg_match('/\b(curl_init|file_get_contents\s*\(\s*[\'"]https?:)/', $wizard));
+
+group('The install is the engine, not this file (TIGER-127)');
+
+// The whole point of the rewrite: one install path. The wizard collects inputs and drives the engine;
+// it must never grow an install step of its own again.
+is_true ('the engine is vendored from a tagged release', (bool) preg_match('/vendored tiger-headless v\d+\.\d+\.\d+ /', $src));
+is_true ('ENGINE_VERSION is stamped',   (bool) preg_match("/ENGINE_VERSION\s*=\s*'\d+\.\d+\.\d+'/", $src));
+is_true ('the engine section is closed', strpos($src, '/* ==== end tiger-headless') !== false);
+// Calls, not words: a step LABEL may say "migrate"; a call to migrate() may not exist here.
+foreach (['migrate', 'createOwner', 'linkPublicAssets', 'provisionSecrets', 'provisionStorage', 'republishAssets', 'hash_file', 'curl_init'] as $fn) {
+    is_false("no $fn() call outside the engine", (bool) preg_match('/\b' . $fn . '\s*\(/', $wizard));
+}
+foreach (['Tiger_Db_Migrator', 'Tiger_Install::', 'Tiger_Application', 'ZipArchive', 'Tiger_Mcp', 'Tiger_Model_'] as $sym) {
+    is_false("no $sym outside the engine", strpos($wizard, $sym) !== false);
+}
+is_true ('every engine step is one the wizard can name', (bool) preg_match('/Tiger_Headless_Installer::STEPS/', $wizard));
+is_true ('the wizard runs the engine in hops', (bool) preg_match('/->run\(\$hop\)/', $wizard));
+is_true ('the spec is validated by the engine before anything is written', strpos($wizard, 'new Tiger_Headless_Spec($spec)') !== false && strpos($wizard, '->check()') !== false);
+is_true ('the job (spec + db password) lives above the docroot, 0600', (bool) preg_match('/job_dir\(\$home\)/', $wizard) && strpos($wizard, '0600') !== false);
+is_false('the db password never rides in a hidden field', (bool) preg_match('/hidden_bag\(\$bag\)(?![^;]*\[)/', substr($wizard, strpos($wizard, "case 'install':"))));
 
 group('Release integrity');
 

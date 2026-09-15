@@ -18,7 +18,7 @@ if (!is_resource($srv)) { fwrite(STDERR, "could not start php -S\n"); exit(2); }
 $html = false;
 for ($i = 0; $i < 50; $i++) {
     usleep(100000);
-    $html = @file_get_contents("http://127.0.0.1:$port/tiger-install.php");
+    $html = @file_get_contents("http://127.0.0.1:$port/dist/tiger-install.php");
     if ($html !== false) { break; }
 }
 

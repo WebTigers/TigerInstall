@@ -25,15 +25,16 @@ jobs:
           php-version: '8.1'   # the floor the preflight demands
           coverage: none
 
-      # Never publish something that does not pass its own tests.
-      - name: Test before packaging
-        run: php tests/run.php
+      # The product is the BUILT file: the wizard with the tagged engine inlined. Never publish
+      # something that does not pass its own tests.
+      - name: Build (inline the tagged engine) and test
+        run: |
+          php build.php
+          php tests/run.php
 
       - name: Build the artifacts
         run: |
           set -euo pipefail
-          mkdir -p dist
-          cp tiger-install.php dist/
           # zip from inside dist so the archive holds tiger-install.php at its root, with no directory
           (cd dist && zip -q -X tiger-install.zip tiger-install.php)
           (cd dist && sha256sum tiger-install.zip > tiger-install.zip.sha256)

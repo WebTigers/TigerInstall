@@ -41,19 +41,33 @@ root — relies on the web server never serving `.php` as text. Tiger inverts th
 
 1. **Checks your host** meets Tiger's requirements (PHP 8.1+, `pdo_mysql`, `zip`, …) — a clear
    pass/fail list with the exact fix for anything short.
-2. **Downloads the latest Tiger release** ZIP from GitHub and **verifies it** against the release's
-   published `.sha256` (over TLS).
-3. **Extracts the app _above_ your document root** — so your code and secrets are **not web-reachable
-   at all**. Only a tiny front-controller shim + asset links go in the docroot.
-4. **Writes your DB settings + freshly-minted secrets** into `local.ini` **above the docroot**,
-   `chmod 600`.
-5. **Builds the database schema** and **creates your admin account** — using Tiger's own installer, so
-   nothing is re-implemented here.
-6. **Deletes itself.**
+2. **Asks for the database you created in cPanel** and the admin account you want — one screen —
+   and proves the database accepts the credentials before anything is written.
+3. **Downloads the latest Tiger release** ZIP from GitHub and **verifies it** against the release's
+   published `.sha256` (over TLS). Manual upload if your host can't reach GitHub.
+4. **Extracts the app above your document root** — code, `local.ini`, secrets — where no URL reaches.
+5. **Writes only a tiny front controller + asset links** into the document root.
+6. **Builds the schema, creates your organization + admin**, optionally mints a scoped AI-agent
+   credential, and goes live — a few steps per request, with progress on screen, resuming from
+   any failure.
+7. **Deletes itself.**
 
-The one thing **you** do by hand: create an empty MySQL database + user in cPanel's *MySQL Databases*
-wizard (a normal cPanel DB account can't create a database from PHP — only you can, in cPanel). The
-installer does everything else.
+## How it is built — no install logic in this file
+
+The installer is **[tiger-headless](https://github.com/WebTigers/TigerHeadless)** — the same install
+engine the [WHM plugin](https://github.com/WebTigers/TigerWHM) and provisioning scripts run —
+inlined into this one file from its tagged release by `build.php` (`ENGINE_VERSION` names the tag).
+The wizard collects inputs, hands the engine one spec, and drives it one hop at a time so a shared
+host's request limits never cut an install in half; the engine's ledger carries progress between
+requests. One install path, proven on the same hosts, whichever front-end you came in through.
+
+```bash
+php build.php          # → dist/tiger-install.php (fetches the tag in ENGINE_VERSION)
+php tests/run.php      # invariants + wizard + smoke, against the built file
+```
+
+The tests hold the line: the wizard section of the built file contains no migrate/owner/asset
+calls of its own, makes no outbound HTTP, and never carries the database password in a hidden field.
 
 ## Multi-domain (cPanel addon domains)
 
@@ -103,18 +117,23 @@ Every page carries a JSON block. Read it instead of the prose:
 | Field | Meaning |
 |---|---|
 | `installer` | installer version |
-| `step` | `requirements` · `location` · `download` · `database` · `admin` · `finish` · `expired` |
-| `status` | `awaiting-input` · `blocked` · `error` · `ok` |
+| `step` | `requirements` · `location` · `details` · `install` · `finish` · `expired` |
+| `status` | `awaiting-input` · `blocked` · `running` · `error` · `ok` |
 | `next_step` | the `step` value to post next, when the screen is waiting on input |
 | `fields` | the field names this screen expects |
 | `error` / `detail` | a stable error slug plus the human message, when `status` is `error` |
 | `checks` | requirements only: each check with `ok`, `required`, and a `fix` when failing |
+| `steps` / `failed_at` / `manual_upload` | `install` only: the engine steps this hop ran (`step`, `status`, `detail`); on `error`, the step that stopped and whether a hand-uploaded bundle is offered |
 
 `status` alone answers "did that work?" — `blocked` means an unmet requirement the user must fix,
-`error` means the step can be retried, `ok` appears only on `finish`.
+`running` means post `step=install` again (the page does this itself after 400 ms; no fields needed —
+the spec is on file), `error` means the same post retries from the failed step, `ok` appears only
+on `finish`.
 
-Retrying is safe and needs no re-upload; the file only deletes itself **after** the owner is created.
-Every error path stops before that.
+The `details` screen takes every input at once (`db_*` plus the admin fields); the engine validates
+the whole spec and proves the database accepts the credentials before anything is written. From then
+on the install is a sequence of `step=install` posts. Retrying is safe and needs no re-upload; the
+file only deletes itself **after** the site is live. Every error path stops before that.
 
 ### 2. The connect handshake — how a client gets a credential
 
@@ -122,7 +141,7 @@ A fresh Tiger is deliberately unreachable by an agent: `/mcp` is off and a scope
 minted by an authenticated admin. The installer's finish step is the one moment a human is present,
 authenticated, and making a deliberate choice — so that is where the credential is handed out.
 
-**Tick "Let the assistant that installed Tiger manage it"** on the admin step. The checkbox can be
+**Tick "Let the assistant that installed Tiger manage it"** on the details step. The checkbox can be
 pre-ticked with `?agent=1` on the installer URL, but it is always **visible before you submit and can
 be turned off** — a seeded choice you can see and reverse, never a silent one.
 
@@ -189,14 +208,14 @@ screen verifies all of this and tells you what to toggle in cPanel. Full detail:
 ## Development
 
 ```
-php tests/run.php
+php build.php && php tests/run.php
 ```
 
-No dependencies — the same command CI runs. Three files:
+No dependencies — the same commands CI runs. The tests run against the BUILT file. Three files:
 
 | | |
 |---|---|
-| `tests/invariants.php` | properties that must never regress: one file with no dependencies of its own, **no callback/webhook field of any kind**, outbound calls only to the pinned release URLs, no shell functions (a shared host has no shell), a required checksum, self-deletion |
+| `tests/invariants.php` | properties that must never regress: one file with no dependencies of its own, **no callback/webhook field of any kind**, no outbound HTTP in the wizard (the engine's calls reach pinned release hosts), no shell functions (a shared host has no shell), a required checksum, self-deletion — and, since 2.0, **no install logic outside the vendored engine**: no migrate/owner/asset calls, the spec validated by the engine, the database password never in a hidden field |
 | `tests/wizard.php` | the agent checkbox — rendered, unticked by default, reversible, never also a hidden input — and the machine-readable state block, including that a `<` in the payload cannot break out of the script element |
 | `tests/smoke.php` | serves the installer and reads its state block back, proving it runs and reports where it is |
 

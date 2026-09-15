@@ -8,7 +8,7 @@
  * away from the code it claims to cover.
  */
 
-const INSTALLER_FILE = __DIR__ . '/../tiger-install.php';
+const INSTALLER_FILE = __DIR__ . '/../dist/tiger-install.php';   // the BUILT file (php build.php) — engine inlined
 const CONTROLLER_MARK = "/* ---------------------------------------------------------------------------\n * Controller";
 
 function installer_source() {

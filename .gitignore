@@ -6,3 +6,5 @@
 # zip drift from tiger-install.php, and shipped a release reporting the wrong version.
 tiger-install.zip
 tiger-install.zip.sha256
+# The built installer (php build.php) — src/installer.php + the tagged engine. Same rule: never committed.
+dist/
