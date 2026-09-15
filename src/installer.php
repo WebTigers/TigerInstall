@@ -31,7 +31,7 @@ error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
 @ini_set('display_errors', '1');
 @set_time_limit(0);
 
-const INSTALLER_VERSION = '2.0.0';
+const INSTALLER_VERSION = '2.0.1';
 const ENGINE_VERSION    = '@@ENGINE_VERSION@@';   // stamped by build.php from the vendored tag
 const RELEASE_REPO      = 'webtigers/tiger';      // the skeleton repo whose releases host the full-app bundle
 const MIN_PHP           = '8.1.0';
@@ -220,6 +220,12 @@ function field($label, $name, $type, $value, $placeholder = '') {
 function admin_form($bag, $errNote = '') {
     return '<h1>Your database and admin account</h1>'
         . ($errNote !== '' ? '<div class="note bad">' . h($errNote) . '</div>' : '')
+        // The handoff. An assistant that drove the browser here should stop: the admin password is the
+        // owner's to choose, and this form is the moment a human is present. What happens next is
+        // spelled out so nobody sits wondering whether to click or wait.
+        . '<div class="note"><strong>Installing with an AI assistant?</strong> This part is yours: fill in the database you created, '
+        . 'choose your admin password, and click <strong>Install Tiger</strong>. When it finishes, <strong>download the credentials file</strong> '
+        . 'and hand it to your assistant &mdash; it holds the site address, your admin login, and (if you tick the box below) the access key that lets it manage the site.</div>'
         . '<div class="card"><h2>First, create a database in cPanel</h2><ol class="mut" style="margin:0;padding-left:18px">'
         . '<li>cPanel &rarr; <strong>MySQL&reg; Databases</strong>.</li>'
         . '<li>Create a <strong>New Database</strong> (e.g. <code>tiger</code>).</li>'
@@ -467,7 +473,11 @@ case 'details':
     page('Database & admin', steps_nav('details') . admin_form($bag),
         ['installer' => INSTALLER_VERSION, 'step' => 'details', 'status' => 'awaiting-input', 'next_step' => 'install',
          'fields' => ['db_host', 'db_name', 'db_user', 'db_pass', 'org', 'email', 'email2', 'username', 'password', 'password2', 'agent'],
-         'agent_requested' => $agentWanted]);
+         'agent_requested' => $agentWanted,
+         // For a client that drove the browser here: stop, hand over, ask for the file afterwards.
+         'handoff' => 'Stop here. The person fills in the database and their admin account and clicks Install Tiger; '
+                    . 'when it finishes they download the credentials file — ask them for it. It carries the site URL, '
+                    . 'the admin login and, if they ticked the agent box, the /mcp access key.']);
     break;
 
 /* --- Install — hand the engine its spec, then one hop per request ------- */
@@ -581,7 +591,8 @@ case 'install':
         $body .= '<div class="card"><h2>&#128190; Save your credentials</h2>'
             . '<p class="mut">One file with your admin login, database details, paths'
             . ($agentWanted && !empty($agent['ok']) ? ' and the agent access key' : '')
-            . '. <strong>This installer deletes itself</strong>, so this is the only time these appear together.</p>'
+            . '. <strong>This installer deletes itself</strong>, so this is the only time these appear together.'
+            . ($agentWanted && !empty($agent['ok']) ? ' <strong>Hand this file to your assistant</strong> &mdash; it is everything it needs to manage the site.' : '') . '</p>'
             . '<a class="btn" download="' . h($credName) . '" href="data:text/plain;charset=utf-8;base64,'
             . base64_encode($credText) . '">&#11015; Download credentials</a>'
             . '<div class="note">It contains passwords. Put it in a password manager, not your Downloads folder.</div>'

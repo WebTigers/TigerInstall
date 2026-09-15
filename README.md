@@ -141,6 +141,13 @@ A fresh Tiger is deliberately unreachable by an agent: `/mcp` is off and a scope
 minted by an authenticated admin. The installer's finish step is the one moment a human is present,
 authenticated, and making a deliberate choice — so that is where the credential is handed out.
 
+**The handoff.** A client that drives the browser should **stop at the `details` screen** — the
+state block says so (`handoff`). The database and the admin password are the owner's to enter, and
+that form is the one moment a human is present. Tell them: *fill it in, click Install Tiger, then
+download the credentials file and give it to me.* The file carries the site URL, the admin login and
+— if they ticked the agent box — the `/mcp` access key. That is simpler and safer than the client
+trying to read a once-only key off a page it may never see.
+
 **Tick "Let the assistant that installed Tiger manage it"** on the details step. The checkbox can be
 pre-ticked with `?agent=1` on the installer URL, but it is always **visible before you submit and can
 be turned off** — a seeded choice you can see and reverse, never a silent one.
