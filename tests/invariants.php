@@ -62,7 +62,7 @@ is_true ('every engine step is one the wizard can name', (bool) preg_match('/Tig
 is_true ('the wizard runs the engine in hops', (bool) preg_match('/->run\(\$hop\)/', $wizard));
 is_true ('the spec is validated by the engine before anything is written', strpos($wizard, 'new Tiger_Headless_Spec($spec)') !== false && strpos($wizard, '->check()') !== false);
 is_true ('the job (spec + db password) lives above the docroot, 0600', (bool) preg_match('/job_dir\(\$home\)/', $wizard) && strpos($wizard, '0600') !== false);
-is_false('the db password never rides in a hidden field', (bool) preg_match('/hidden_bag\(\$bag\)(?![^;]*\[)/', substr($wizard, strpos($wizard, "case 'install':"))));
+is_false('the db password never rides in a hidden field', (bool) preg_match('/hidden_bag\(\$bag\)(?![^;]*\[)/', substr($wizard, strpos($wizard, "case 'choices':"))));
 
 group('Release integrity');
 

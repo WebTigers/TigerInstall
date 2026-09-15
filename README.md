@@ -41,18 +41,18 @@ root — relies on the web server never serving `.php` as text. Tiger inverts th
 
 1. **Checks your host** meets Tiger's requirements (PHP 8.1+, `pdo_mysql`, `zip`, …) — a clear
    pass/fail list with the exact fix for anything short.
-2. **Asks for the database you created in cPanel**, what to install — theme, modules and skill packs
-   for Tiger's AI agent, read live from the public [catalog](https://github.com/WebTigers/TigerCatalog)
-   and [Directory](https://github.com/WebTigers/TigerVendors), pre-selected to the catalog's defaults —
-   and the admin account you want, on one screen; then proves the database accepts the credentials
-   before anything is written.
+2. **Asks for the database you created in cPanel** and the admin account you want, and proves the
+   database accepts the credentials before anything is written; then **what to install** — theme,
+   modules and skill packs for Tiger's AI agent, read live from the public
+   [catalog](https://github.com/WebTigers/TigerCatalog) and [Directory](https://github.com/WebTigers/TigerVendors),
+   pre-selected to the catalog's defaults.
 3. **Downloads the latest Tiger release** ZIP from GitHub and **verifies it** against the release's
    published `.sha256` (over TLS). Manual upload if your host can't reach GitHub.
 4. **Extracts the app above your document root** — code, `local.ini`, secrets — where no URL reaches.
 5. **Writes only a tiny front controller + asset links** into the document root.
-6. **Builds the schema, creates your organization + admin**, optionally mints a scoped AI-agent
-   credential, and goes live — a few steps per request, with progress on screen, resuming from
-   any failure.
+6. **Builds the schema, creates your organization + admin**, installs your choices, optionally mints
+   a scoped AI-agent credential, and goes live — one step per request with each shown running and
+   timed on screen, resuming from any failure.
 7. **Deletes itself.**
 
 ## How it is built — no install logic in this file
@@ -120,13 +120,14 @@ Every page carries a JSON block. Read it instead of the prose:
 | Field | Meaning |
 |---|---|
 | `installer` | installer version |
-| `step` | `requirements` · `location` · `details` · `install` · `finish` · `expired` |
+| `step` | `requirements` · `location` · `site` · `choices` · `install` · `finish` · `expired` |
 | `status` | `awaiting-input` · `blocked` · `running` · `error` · `ok` |
 | `next_step` | the `step` value to post next, when the screen is waiting on input |
 | `fields` | the field names this screen expects |
 | `error` / `detail` | a stable error slug plus the human message, when `status` is `error` |
 | `checks` | requirements only: each check with `ok`, `required`, and a `fix` when failing |
-| `choices` | `details` only: the offered `themes` / `modules` / `packs` (slugs) and what is `preselected` — post `theme`, `modules[]`, `packs[]` with `choices_seen=1` to override |
+| `choices` | `choices` only: the offered `themes` / `modules` / `packs` (slugs) and what is `preselected` — post `theme`, `modules[]`, `packs[]` with `choices_seen=1` to override |
+| `steps` / `running` | `install` only: the engine steps this request ran (`step`, `status`, `detail`, `seconds`) and the step the next request runs |
 | `steps` / `failed_at` / `manual_upload` | `install` only: the engine steps this hop ran (`step`, `status`, `detail`); on `error`, the step that stopped and whether a hand-uploaded bundle is offered |
 
 `status` alone answers "did that work?" — `blocked` means an unmet requirement the user must fix,
@@ -134,9 +135,10 @@ Every page carries a JSON block. Read it instead of the prose:
 the spec is on file), `error` means the same post retries from the failed step, `ok` appears only
 on `finish`.
 
-The `details` screen takes every input at once (`db_*` plus the admin fields); the engine validates
-the whole spec and proves the database accepts the credentials before anything is written. From then
-on the install is a sequence of `step=install` posts. Retrying is safe and needs no re-upload; the
+The `site` screen takes the database and admin fields; on submit the engine validates the whole spec
+and proves the database accepts the credentials before anything is written, then the `choices` screen
+offers theme / modules / skill packs. From `step=install` on, each post runs ONE engine step and the
+page shows it running with a timer. Retrying is safe and needs no re-upload; the
 file only deletes itself **after** the site is live. Every error path stops before that.
 
 ### 2. The connect handshake — how a client gets a credential
@@ -145,14 +147,14 @@ A fresh Tiger is deliberately unreachable by an agent: `/mcp` is off and a scope
 minted by an authenticated admin. The installer's finish step is the one moment a human is present,
 authenticated, and making a deliberate choice — so that is where the credential is handed out.
 
-**The handoff.** A client that drives the browser should **stop at the `details` screen** — the
+**The handoff.** A client that drives the browser should **stop at the `site` screen** — the
 state block says so (`handoff`). The database and the admin password are the owner's to enter, and
 that form is the one moment a human is present. Tell them: *fill it in, click Install Tiger, then
 download the credentials file and give it to me.* The file carries the site URL, the admin login and
 — if they ticked the agent box — the `/mcp` access key. That is simpler and safer than the client
 trying to read a once-only key off a page it may never see.
 
-**Tick "Let the assistant that installed Tiger manage it"** on the details step. The checkbox can be
+**Tick "Let the assistant that installed Tiger manage it"** on the site step. The checkbox can be
 pre-ticked with `?agent=1` on the installer URL, but it is always **visible before you submit and can
 be turned off** — a seeded choice you can see and reverse, never a silent one.
 

@@ -31,7 +31,7 @@ error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
 @ini_set('display_errors', '1');
 @set_time_limit(0);
 
-const INSTALLER_VERSION = '2.0.2';
+const INSTALLER_VERSION = '2.1.0';
 const ENGINE_VERSION    = '@@ENGINE_VERSION@@';   // stamped by build.php from the vendored tag
 const RELEASE_REPO      = 'webtigers/tiger';      // the skeleton repo whose releases host the full-app bundle
 const MIN_PHP           = '8.1.0';
@@ -273,6 +273,7 @@ function page($title, $body, array $state = []) {
        . '.mut{color:var(--mut)}table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:7px 6px;border-bottom:1px solid var(--line);vertical-align:top}'
        . '.pill{font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:99px;white-space:nowrap}.p-ok{background:rgba(34,197,94,.15);color:var(--ok)}'
        . '.p-bad{background:rgba(239,68,68,.15);color:var(--bad)}.p-warn{background:rgba(234,179,8,.15);color:var(--warn)}.p-mut{background:rgba(154,164,178,.15);color:var(--mut)}'
+       . '.p-run{background:rgba(245,158,11,.15);color:var(--brand)}.spin{display:inline-block;width:.8em;height:.8em;border:2px solid var(--brand);border-right-color:transparent;border-radius:50%;animation:tgspin .8s linear infinite;vertical-align:-2px}@keyframes tgspin{to{transform:rotate(360deg)}}'
        . 'label{display:block;margin:12px 0 4px;font-weight:600}input[type=text],input[type=password],input[type=email]{width:100%;padding:10px 12px;'
        . 'background:#0d1014;border:1px solid var(--line);border-radius:8px;color:var(--ink);font:inherit}'
        . 'code{background:#0d1014;border:1px solid var(--line);border-radius:5px;padding:1px 6px;font-size:.85em}'
@@ -291,7 +292,7 @@ function page($title, $body, array $state = []) {
 }
 
 function steps_nav($active) {
-    $steps = ['requirements' => 'Requirements', 'location' => 'Location', 'details' => 'Database & admin', 'install' => 'Install'];
+    $steps = ['requirements' => 'Requirements', 'location' => 'Location', 'site' => 'Site', 'choices' => 'What to install', 'install' => 'Install'];
     $out = '<ol class="steps">';
     foreach ($steps as $k => $v) { $out .= '<li class="' . ($k === $active ? 'on' : '') . '">' . h($v) . '</li>'; }
     return $out . '</ol>';
@@ -327,18 +328,17 @@ function field($label, $name, $type, $value, $placeholder = '') {
 }
 
 /**
- * The details form — the database you created in cPanel + the admin account you want, one screen.
+ * The Site form — the database you created in cPanel + the admin account you want.
  * Used for the first ask AND on any error (re-populates every field, passwords included).
  */
-function admin_form($bag, $errNote = '', ?array $catalog = null, ?array $dir = null) {
-    $bag += ['choices_seen' => '', 'theme' => '', 'modules' => [], 'packs' => []];
-    return '<h1>Your database and admin account</h1>'
+function admin_form($bag, $errNote = '') {
+    return '<h1>Your site: database and admin account</h1>'
         . ($errNote !== '' ? '<div class="note bad">' . h($errNote) . '</div>' : '')
         // The handoff. An assistant that drove the browser here should stop: the admin password is the
         // owner's to choose, and this form is the moment a human is present. What happens next is
         // spelled out so nobody sits wondering whether to click or wait.
         . '<div class="note"><strong>Installing with an AI assistant?</strong> This part is yours: fill in the database you created, '
-        . 'choose your admin password, and click <strong>Install Tiger</strong>. When it finishes, <strong>download the credentials file</strong> '
+        . 'choose your admin password, pick what to install on the next screen, and click <strong>Install Tiger</strong>. When it finishes, <strong>download the credentials file</strong> '
         . 'and hand it to your assistant &mdash; it holds the site address, your admin login, and (if you tick the box below) the access key that lets it manage the site.</div>'
         . '<div class="card"><h2>First, create a database in cPanel</h2><ol class="mut" style="margin:0;padding-left:18px">'
         . '<li>cPanel &rarr; <strong>MySQL&reg; Databases</strong>.</li>'
@@ -352,7 +352,6 @@ function admin_form($bag, $errNote = '', ?array $catalog = null, ?array $dir = n
         . field('Database user', 'db_user', 'text', $bag['db_user'], 'acct_tiger')
         . field('Database password', 'db_pass', 'password', $bag['db_pass'])
         . '</div></div>'
-        . ($catalog !== null && $dir !== null ? choices_form($bag, $catalog, $dir) : '')
         . '<div class="card"><h2>Admin account</h2><div class="grid">'
         . field('Organization name', 'org', 'text', $bag['org'], 'My Company')
         . field('Username (optional)', 'username', 'text', $bag['username'])
@@ -366,7 +365,16 @@ function admin_form($bag, $errNote = '', ?array $catalog = null, ?array $dir = n
         . '<span>Let the assistant that installed Tiger manage it'
         . '<br><span class="mut" style="font-weight:400;font-size:.9em">Turns on the <code>/mcp</code> endpoint and shows a scoped access key when the install completes. '
         . 'You can see and revoke it any time at <code>/mcp/admin</code>. Leave this off if you are installing by hand.</span></span></label>'
-        . '</div>' . nav_buttons('location', 'install', $errNote !== '' ? 'Try again' : 'Install Tiger') . '</form>';
+        . '</div>' . nav_buttons('location', 'choices', $errNote !== '' ? 'Try again' : 'Continue') . '</form>';
+}
+
+/** The "What to install" screen: the choices card in its own form; back to Site, forward to Install. */
+function choices_page(array $bag, array $catalog, array $dir) {
+    return '<h1>What to install</h1>'
+        . '<p class="mut">Pre-selected to what a new Tiger site usually wants. Everything here can be added or removed later from the admin.</p>'
+        . '<form method="post">' . hidden_bag([], [])
+        . choices_form($bag, $catalog, $dir)
+        . nav_buttons('site', 'install', 'Install Tiger') . '</form>';
 }
 
 /** Cheap local checks before the slow work — nobody should wait through a download to be told they mistyped their own email. */
@@ -456,30 +464,42 @@ function spec_from_bag(array $bag, $domain, $scheme) {
     ];
 }
 
-/** Where each web request stops: four hops, so no single request downloads, migrates AND wires the site. */
-function install_hops() { return ['extract', 'owner', 'skills', 'expose']; }
-
-/** The next hop for this app root — the first whose step the ledger has not completed. */
+/**
+ * One engine step per request: the progress list moves every few seconds, and no single request
+ * downloads, migrates AND wires the site. `requirements` re-runs on every call (cheap) — the first
+ * hop stops after `fetch`.
+ */
 function next_hop($appDir) {
     $state = new Tiger_Headless_State($appDir);
-    foreach (install_hops() as $hop) { if (!$state->stepDone($hop)) { return $hop; } }
+    foreach (Tiger_Headless_Installer::STEPS as $step) { if ($step !== 'requirements' && !$state->stepDone($step)) { return $step; } }
     return 'expose';
 }
 
+function step_labels() {
+    return ['requirements' => 'Requirements', 'fetch' => 'Download the release', 'extract' => 'Extract above the web root', 'configure' => 'Write local.ini + secrets',
+            'migrate' => 'Build the schema', 'storage' => 'Storage folders', 'owner' => 'Organization + admin account', 'modules' => 'Modules', 'theme' => 'Theme',
+            'skills' => 'Agent skills', 'assets' => 'Assets into the web root', 'agent' => 'AI agent credential', 'expose' => 'Front controller (go live)'];
+}
+
 /** The progress list: every engine step with what the ledger (and this run's result) say about it. */
-function progress_rows($appDir, ?array $result = null) {
+function progress_rows($appDir, ?array $result = null, $next = '') {
     $state = new Tiger_Headless_State($appDir);
     $ran   = $result ? array_column($result['steps'] ?? [], null, 'step') : [];
-    $label = ['requirements' => 'Requirements', 'fetch' => 'Download the release', 'extract' => 'Extract above the web root', 'configure' => 'Write local.ini + secrets',
-              'migrate' => 'Build the schema', 'storage' => 'Storage folders', 'owner' => 'Organization + admin account', 'modules' => 'Modules', 'theme' => 'Theme',
-              'skills' => 'Agent skills', 'assets' => 'Assets into the web root', 'agent' => 'AI agent credential', 'expose' => 'Front controller (go live)'];
-    $rows = '';
+    $label = step_labels();
+    $rows  = '';
     foreach (Tiger_Headless_Installer::STEPS as $s) {
-        $st = $ran[$s]['status'] ?? ($state->stepDone($s) ? 'ok' : (($state->steps()[$s]['status'] ?? '') === 'failed' ? 'failed' : 'pending'));
-        $detail = (string) ($ran[$s]['detail'] ?? ($state->steps()[$s]['detail'] ?? ''));
-        $pill = ['ok' => '<span class="pill p-ok">DONE</span>', 'skipped' => '<span class="pill p-ok">DONE</span>', 'failed' => '<span class="pill p-bad">FAILED</span>'][$st] ?? '<span class="pill p-mut">PENDING</span>';
-        $rows .= '<tr><td style="width:90px">' . $pill . '</td><td><strong>' . h($label[$s] ?? $s) . '</strong>'
-               . ($detail !== '' && $st !== 'pending' ? '<br><span class="mut" style="font-size:.85em">' . h(mb_strimwidth($detail, 0, 160, '…')) . '</span>' : '') . '</td></tr>';
+        $led = $state->steps()[$s] ?? [];
+        $st  = $ran[$s]['status'] ?? ($state->stepDone($s) ? 'ok' : (($led['status'] ?? '') === 'failed' ? 'failed' : 'pending'));
+        if ($st === 'pending' && $s === $next) { $st = 'running'; }
+        // A step done on an earlier request reports "skipped" this time; the ledger holds what it actually did, and how long it took.
+        $fromLedger = $st === 'skipped' || !isset($ran[$s]);
+        $detail = (string) ($fromLedger ? ($led['detail'] ?? '') : ($ran[$s]['detail'] ?? ''));
+        $secs   = $fromLedger ? (isset($led['seconds']) ? (float) $led['seconds'] : null) : (isset($ran[$s]['seconds']) ? (float) $ran[$s]['seconds'] : null);
+        $pill = ['ok' => '<span class="pill p-ok">DONE</span>', 'skipped' => '<span class="pill p-ok">DONE</span>', 'failed' => '<span class="pill p-bad">FAILED</span>',
+                 'running' => '<span class="pill p-run" id="tiger-running">RUNNING <span class="spin"></span> <span id="tiger-elapsed"></span></span>'][$st] ?? '<span class="pill p-mut">PENDING</span>';
+        $rows .= '<tr id="tiger-step-' . h($s) . '"><td style="width:150px">' . $pill . '</td><td><strong>' . h($label[$s] ?? $s) . '</strong>'
+               . ($secs !== null && $secs >= 0.5 ? ' <span class="mut" style="font-size:.85em">' . number_format($secs, 1) . ' s</span>' : '')
+               . ($detail !== '' && $st !== 'pending' && $st !== 'running' ? '<br><span class="mut" style="font-size:.85em">' . h(mb_strimwidth($detail, 0, 160, '…')) . '</span>' : '') . '</td></tr>';
     }
     return $rows;
 }
@@ -521,10 +541,16 @@ if ($bag['docroot'] === '') { $bag['docroot'] = $docroot; }
 if ($bag['app_dir'] === '') { $bag['app_dir'] = $home . '/' . $domain . '/tiger-app'; }
 if ($bag['db_host'] === '') { $bag['db_host'] = 'localhost'; }
 
-// A job in flight (the engine has its spec) always lands on the install screen — a reload, a Back, or
-// a fresh GET must never restart the wizard around a half-done ledger.
+// A job in flight always lands where it belongs: once the engine is running, a reload, a Back, or a
+// fresh GET must never restart the wizard around a half-done ledger; before that (the spec written at
+// the Site step, choices not yet made) a GET lands on the choices screen.
 $job = job_load($home);
-if ($job !== null && $_SERVER['REQUEST_METHOD'] !== 'POST') { $step = 'install'; }
+if ($job !== null && $_SERVER['REQUEST_METHOD'] !== 'POST') { $step = ($job['stage'] ?? 'installing') === 'site' ? 'choices' : 'install'; }
+// Back to the Site screen with a job written: refill the form from the job (the password included).
+if ($job !== null && ($job['stage'] ?? '') === 'site' && $step === 'site' && post('email') === '') {
+    foreach (['db_host', 'db_name', 'db_user', 'db_pass', 'org', 'email', 'username', 'password', 'agent'] as $f) { $bag[$f] = (string) ($job['bag'][$f] ?? $bag[$f]); }
+    $bag['email2'] = $bag['email']; $bag['password2'] = $bag['password'];
+}
 
 // CSRF gate for every POST.
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && !csrf_ok()) {
@@ -583,63 +609,75 @@ case 'location':
         . field('App folder', 'app_dir', 'text', $bag['app_dir'])
         . '<div class="note">Running several domains on this account? Each gets its own folder like '
         . '<code>' . h($home) . '/&lt;domain&gt;/tiger-app</code> and its own database — fully independent installs.</div>'
-        . '</div>' . nav_buttons('welcome', 'details', 'Continue') . '</form>';
+        . '</div>' . nav_buttons('welcome', 'site', 'Continue') . '</form>';
     page('Location', $body, ['installer' => INSTALLER_VERSION, 'step' => 'location', 'status' => 'awaiting-input',
-        'next_step' => 'details', 'fields' => ['app_dir', 'docroot'], 'app_dir' => $bag['app_dir'], 'docroot' => $bag['docroot']]);
+        'next_step' => 'site', 'fields' => ['app_dir', 'docroot'], 'app_dir' => $bag['app_dir'], 'docroot' => $bag['docroot']]);
     break;
 
-/* --- Details — the database + the admin account, one form -------------- */
-case 'details':
-    $catalog = catalog_load($home); $dir = directory_load($home);
-    page('Database & admin', steps_nav('details') . admin_form($bag, '', $catalog, $dir),
-        ['installer' => INSTALLER_VERSION, 'step' => 'details', 'status' => 'awaiting-input', 'next_step' => 'install',
-         'fields' => ['db_host', 'db_name', 'db_user', 'db_pass', 'theme', 'modules[]', 'packs[]', 'org', 'email', 'email2', 'username', 'password', 'password2', 'agent'],
+/* --- Site — the database + the admin account ----------------------------- */
+case 'site':
+    page('Site', steps_nav('site') . admin_form($bag),
+        ['installer' => INSTALLER_VERSION, 'step' => 'site', 'status' => 'awaiting-input', 'next_step' => 'choices',
+         'fields' => ['db_host', 'db_name', 'db_user', 'db_pass', 'org', 'email', 'email2', 'username', 'password', 'password2', 'agent'],
          'agent_requested' => $agentWanted,
-         'choices' => ['themes' => array_column($dir['themes'], 'slug'), 'modules' => array_column($dir['modules'], 'slug'), 'packs' => array_column($catalog['packs'], 'id'),
-                       'preselected' => ['theme' => $catalog['featured']['theme'], 'modules' => $catalog['featured']['modules'], 'packs' => array_column(array_filter($catalog['packs'], static fn($p) => $p['default']), 'id')]],
          // For a client that drove the browser here: stop, hand over, ask for the file afterwards.
-         'handoff' => 'Stop here. The person fills in the database and their admin account and clicks Install Tiger; '
-                    . 'when it finishes they download the credentials file — ask them for it. It carries the site URL, '
-                    . 'the admin login and, if they ticked the agent box, the /mcp access key.']);
+         'handoff' => 'Stop here. The person fills in the database and their admin account, picks what to install on the next '
+                    . 'screen and clicks Install Tiger; when it finishes they download the credentials file — ask them for it. It '
+                    . 'carries the site URL, the admin login and, if they ticked the agent box, the /mcp access key.']);
     break;
 
-/* --- Install — hand the engine its spec, then one hop per request ------- */
-case 'install':
-    $detailsFields = ['db_host', 'db_name', 'db_user', 'db_pass', 'theme', 'modules[]', 'packs[]', 'org', 'email', 'email2', 'username', 'password', 'password2', 'agent'];
-    $catalog = $job === null ? catalog_load($home) : null; $dir = $job === null ? directory_load($home) : null;
-    if ($job === null) { $bag['skills'] = skills_for($catalog, $bag['packs']); }
-    $errState = static fn($error, $detail) => ['installer' => INSTALLER_VERSION, 'step' => 'details', 'status' => 'error', 'error' => $error,
-        'detail' => $detail, 'fields' => $detailsFields, 'agent_requested' => truthy($bag['agent'])];
-
-    if ($job === null) {
-        // First entry: the details form was just submitted. Validate locally, then let the engine
-        // validate the whole spec and prove the host + database — before anything is written.
-        if (post('email') === '' && post('db_name') === '') {   // a stray GET/POST with no job and no form → start over
-            header('Location: ?', true, 302); exit;
-        }
+/* --- Choices — what to install. On entry from Site: validate + prove the database, write the job --- */
+case 'choices':
+    $siteFields = ['db_host', 'db_name', 'db_user', 'db_pass', 'org', 'email', 'email2', 'username', 'password', 'password2', 'agent'];
+    $siteErr = static fn($error, $detail) => ['installer' => INSTALLER_VERSION, 'step' => 'site', 'status' => 'error', 'error' => $error,
+        'detail' => $detail, 'fields' => $siteFields, 'agent_requested' => truthy($bag['agent'])];
+    if (post('email') !== '' || post('db_name') !== '') {
+        // The Site form was just submitted. Validate locally, then let the engine validate the whole
+        // spec and prove the host + database — before anything is written, and before the choices.
         $err = admin_errors($bag);
         if ($err === '' && ($bag['db_name'] === '' || $bag['db_user'] === '')) { $err = 'Enter the database name and user you created in cPanel.'; }
-        if ($err !== '') { page('Database & admin', steps_nav('details') . admin_form($bag, $err, $catalog, $dir), $errState('admin_fields_invalid', $err)); break; }
-
+        if ($err !== '') { page('Site', steps_nav('site') . admin_form($bag, $err), $siteErr('admin_fields_invalid', $err)); break; }
         $spec = spec_from_bag($bag, $domain, $scheme);
-        // A bundle uploaded by hand on an earlier attempt (see the download-failure path) is reused.
         if (is_file(job_dir($home) . '/tiger.zip')) { $spec['source'] = ['bundle' => job_dir($home) . '/tiger.zip']; }
         try {
             $validated = new Tiger_Headless_Spec($spec);
         } catch (Tiger_Headless_SpecException $e) {
             $err = implode(' ', $e->problems());
-            page('Database & admin', steps_nav('details') . admin_form($bag, $err, $catalog, $dir), $errState('spec_invalid', $err)); break;
+            page('Site', steps_nav('site') . admin_form($bag, $err), $siteErr('spec_invalid', $err)); break;
         }
         $check = (new Tiger_Headless_Installer($validated))->check()->toArray();
         if (empty($check['ok'])) {
             $err = (string) ($check['error']['message'] ?? 'requirements failed');
-            page('Database & admin', steps_nav('details') . admin_form($bag, $err, $catalog, $dir), $errState('requirements_failed', $err)); break;
+            page('Site', steps_nav('site') . admin_form($bag, $err), $siteErr('requirements_failed', $err)); break;
         }
-        $job = ['spec' => $spec, 'bag' => array_diff_key($bag, ['db_pass' => 1, 'password' => 1, 'password2' => 1]) + ['db_pass' => $bag['db_pass'], 'password' => $bag['password']], 'started' => gmdate('c')];
+        $job = ['stage' => 'site', 'spec' => $spec, 'bag' => array_intersect_key($bag, array_flip(['app_dir', 'docroot', 'db_host', 'db_name', 'db_user', 'db_pass', 'org', 'email', 'username', 'password', 'agent'])), 'started' => gmdate('c')];
         if (!job_save($home, $job)) {
             $err = 'Could not write the install record under ' . h(job_dir($home)) . ' — is the home folder writable?';
-            page('Database & admin', steps_nav('details') . admin_form($bag, $err, $catalog, $dir), $errState('job_write_failed', $err)); break;
+            page('Site', steps_nav('site') . admin_form($bag, $err), $siteErr('job_write_failed', $err)); break;
         }
+    } elseif ($job === null) {
+        header('Location: ?', true, 302); exit;   // nothing to choose for yet
+    }
+    $catalog = catalog_load($home); $dir = directory_load($home);
+    page('What to install', steps_nav('choices') . choices_page($bag, $catalog, $dir),
+        ['installer' => INSTALLER_VERSION, 'step' => 'choices', 'status' => 'awaiting-input', 'next_step' => 'install',
+         'fields' => ['theme', 'modules[]', 'packs[]', 'choices_seen'],
+         'choices' => ['themes' => array_column($dir['themes'], 'slug'), 'modules' => array_column($dir['modules'], 'slug'), 'packs' => array_column($catalog['packs'], 'id'),
+                       'preselected' => ['theme' => $catalog['featured']['theme'], 'modules' => $catalog['featured']['modules'], 'packs' => array_column(array_filter($catalog['packs'], static fn($p) => $p['default']), 'id')]]]);
+    break;
+
+/* --- Install — one engine step per request; a GET only shows ------------ */
+case 'install':
+    if ($job === null) { header('Location: ?', true, 302); exit; }
+    if (($job['stage'] ?? '') === 'site') {
+        // First entry from the choices screen: the choices join the spec, and the engine starts.
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') { header('Location: ?step=choices', true, 302); exit; }
+        $catalog = catalog_load($home);
+        $job['spec']['theme']   = $bag['choices_seen'] === '1' ? $bag['theme'] : $catalog['featured']['theme'];
+        $job['spec']['modules'] = $bag['choices_seen'] === '1' ? $bag['modules'] : $catalog['featured']['modules'];
+        $job['spec']['skills']  = skills_for($catalog, $bag['choices_seen'] === '1' ? $bag['packs'] : array_column(array_filter($catalog['packs'], static fn($p) => $p['default']), 'id'));
+        $job['stage'] = 'installing';
+        job_save($home, $job);
     } elseif (!empty($_FILES['bundle']['tmp_name']) && is_uploaded_file($_FILES['bundle']['tmp_name'])) {
         // Manual upload after a download failure: becomes source.bundle (unverified — the engine says so).
         @mkdir(job_dir($home), 0700, true);
@@ -651,7 +689,7 @@ case 'install':
 
     $spec   = $job['spec'];
     $appDir = $spec['paths']['app_root'];
-    $hop    = next_hop($appDir);
+    $hop    = next_hop($appDir);   // the one step this request runs
     // Only a POST runs a hop. A GET (a reload, a Back, the first visit after a lost tab) shows where
     // the ledger stands and lets the page — or the button — post the next hop; a reload never executes.
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -664,6 +702,12 @@ case 'install':
     if ($done) {
         /* --- Finish — the site is live: show what to keep, clean up, self-delete ------------- */
         $jb    = $job['bag'] + ['docroot' => $spec['paths']['docroot'], 'app_dir' => $appDir];
+        $ledger = (new Tiger_Headless_State($appDir))->steps(); $labels = step_labels(); $summary = ''; $total = 0.0;
+        foreach (Tiger_Headless_Installer::STEPS as $st) {
+            if (!isset($ledger[$st])) { continue; }
+            $sec = (float) ($ledger[$st]['seconds'] ?? 0); $total += $sec;
+            $summary .= '<tr><td class="mut" style="width:45%">' . h($labels[$st] ?? $st) . '</td><td>' . ($sec >= 0.05 ? number_format($sec, 1) . ' s' : '<span class="mut">—</span>') . ' <span class="mut" style="font-size:.85em">' . h(mb_strimwidth((string) ($ledger[$st]['detail'] ?? ''), 0, 90, '…')) . '</span></td></tr>';
+        }
         $agent = !empty($result['agent']['token']) ? ['ok' => true, 'token' => $result['agent']['token'], 'modules' => (array) ($result['agent']['modules'] ?? [])] : ['ok' => false, 'error' => ''];
         $agentWanted = !empty($spec['agent']);
         job_clear($home);
@@ -677,6 +721,7 @@ case 'install':
             . '<tr><td class="mut">Admin</td><td><a style="color:var(--brand)" target="_blank" rel="noopener" href="' . h($base) . '/admin">' . h($base) . '/admin</a></td></tr>'
             . '<tr><td class="mut">Tiger</td><td>' . h((string) ($result['version'] ?? '')) . '</td></tr>'
             . '</table></div>'
+            . ($summary !== '' ? '<details class="card" style="padding:14px 22px"><summary class="mut" style="cursor:pointer">What was done — ' . number_format($total, 0) . ' s in all</summary><table style="margin-top:10px">' . $summary . '</table></details>' : '')
             . ($deleted
                 ? '<div class="note ok">This installer has deleted itself. Nothing else to clean up.</div>'
                 : '<div class="note bad"><strong>Delete this file now.</strong> The installer couldn&rsquo;t remove itself — delete <code>' . h(__FILE__) . '</code> via File Manager/FTP immediately.</div>');
@@ -732,6 +777,7 @@ case 'install':
             'admin'        => $base . '/admin',
             'version'      => $result['version'] ?? null,
             'app_dir'      => $appDir,
+            'timings'      => array_map(static fn($st) => ['step' => $st, 'seconds' => isset($ledger[$st]['seconds']) ? (float) $ledger[$st]['seconds'] : null], array_values(array_filter(Tiger_Headless_Installer::STEPS, static fn($st) => isset($ledger[$st])))),
             'self_deleted' => (bool) $deleted,
             'agent'        => $agentWanted && !empty($agent['ok'])
                 ? ['enabled' => true, 'endpoint' => $base . '/mcp', 'token' => $agent['token'], 'manage' => $base . '/mcp/admin',
@@ -750,7 +796,8 @@ case 'install':
         $body .= '<div class="note bad"><strong>Stopped at &ldquo;' . h($errAt) . '&rdquo;:</strong> ' . h($errMsg) . '</div>'
                . '<p class="mut">Fix what it names, then continue — the install resumes from that step; everything already done is kept. Nothing is web-reachable until every step passes.</p>';
     }
-    $body .= '<div class="card"><table>' . progress_rows($appDir, $result) . '</table></div>';
+    $nextStep = $failed ? $errAt : (string) ($result['next_step'] ?? next_hop($appDir));
+    $body .= '<div class="card"><table>' . progress_rows($appDir, $result, $failed ? '' : $nextStep) . '</table></div>';
     $body .= '<form method="post" id="tiger-go">' . hidden_bag([], []) . '<input type="hidden" name="step" value="install">'
            . '<button type="submit" class="btn">' . ($failed ? 'Retry from &ldquo;' . h($errAt) . '&rdquo;' : 'Continue') . ' &rarr;</button></form>';
     if ($failed && $errAt === 'fetch') {
@@ -763,8 +810,12 @@ case 'install':
             . '<button type="submit" class="btn sec">Upload &amp; continue &rarr;</button></form></div>';
     }
     if (!$failed) {
-        // Keep going without a click; the button is the no-JS path and the "it is stuck" path.
-        $body .= '<script>setTimeout(function(){var f=document.getElementById("tiger-go");if(f){f.submit();}},400);</script>';
+        // Keep going without a click; the button is the no-JS path and the "it is stuck" path. The browser
+        // keeps THIS page on screen while the next request runs, so the running row + its timer are what
+        // the person watches during the step.
+        $body .= '<script>(function(){var t0=Date.now(),el=document.getElementById("tiger-elapsed");if(el){setInterval(function(){el.textContent=Math.round((Date.now()-t0)/1000)+" s";},1000);}'
+               . 'var b=document.querySelector("#tiger-go button");if(b){b.disabled=true;b.textContent="Installing\u2026";}'
+               . 'setTimeout(function(){var f=document.getElementById("tiger-go");if(f){f.submit();}},300);})();</script>';
     }
     page($failed ? 'Install stopped' : 'Installing', $body, [
         'installer' => INSTALLER_VERSION, 'engine' => ENGINE_VERSION,
@@ -774,9 +825,8 @@ case 'install':
         'error'     => $failed ? 'step_failed' : null,
         'detail'    => $failed ? $errMsg : null,
         'failed_at' => $failed ? $errAt : null,
-        'hop'       => $hop,
-        'engine_next_step' => $result['next_step'] ?? null,
-        'steps'     => array_map(static fn($s) => ['step' => $s['step'], 'status' => $s['status'], 'detail' => $s['detail'] ?? ''], $result['steps'] ?? []),
+        'running'   => $failed ? null : $nextStep,
+        'steps'     => array_map(static fn($s) => ['step' => $s['step'], 'status' => $s['status'], 'detail' => $s['detail'] ?? '', 'seconds' => isset($s['seconds']) ? round((float) $s['seconds'], 1) : null], $result['steps'] ?? []),
         'manual_upload' => $failed && $errAt === 'fetch',
     ]);
     break;
