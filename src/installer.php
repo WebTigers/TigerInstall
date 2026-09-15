@@ -31,10 +31,15 @@ error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
 @ini_set('display_errors', '1');
 @set_time_limit(0);
 
-const INSTALLER_VERSION = '2.0.1';
+const INSTALLER_VERSION = '2.0.2';
 const ENGINE_VERSION    = '@@ENGINE_VERSION@@';   // stamped by build.php from the vendored tag
 const RELEASE_REPO      = 'webtigers/tiger';      // the skeleton repo whose releases host the full-app bundle
 const MIN_PHP           = '8.1.0';
+// What a fresh install is offered — the same two public files the WHM plugin reads: the catalog (featured
+// theme/modules + skill packs, WebTigers/TigerCatalog) and the Directory (what is installable, WebTigers/TigerVendors).
+const CATALOG_URL       = 'https://raw.githubusercontent.com/WebTigers/TigerCatalog/main/catalog.json';
+const DIRECTORY_URL     = 'https://raw.githubusercontent.com/WebTigers/TigerVendors/main/data/index.json';
+const LIST_TIMEOUT      = 5;   // seconds a page render may spend on each list; unreachable = Tiger's defaults
 
 /* @@TIGER_HEADLESS@@ */
 
@@ -53,6 +58,11 @@ $GLOBALS['__csrf'] = $__csrf;
 
 function h($s) { return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8'); }
 function post($k, $d = '') { return isset($_POST[$k]) ? trim((string) $_POST[$k]) : $d; }
+/** A posted list (checkboxes) as clean slugs. */
+function posta($k) {
+    $v = isset($_POST[$k]) && is_array($_POST[$k]) ? $_POST[$k] : [];
+    return array_values(array_unique(array_filter(array_map(static fn($x) => preg_match('/^[a-z0-9][a-z0-9_-]*$/', strtolower(trim((string) $x))) ? strtolower(trim((string) $x)) : '', $v))));
+}
 function req($k, $d = '') { return isset($_REQUEST[$k]) ? trim((string) $_REQUEST[$k]) : $d; }
 
 /** Checkbox / query-flag truthiness: "1", "on", "true", "yes" (any case, trimmed). */
@@ -137,6 +147,109 @@ function job_clear($home) {
 }
 
 /* ---------------------------------------------------------------------------
+ * The lists — what a fresh install is offered (theme, modules, skill packs)
+ *
+ * Read from the same two public files the WHM plugin uses, cached for an hour in the job dir above
+ * the docroot, each with a short budget: an unreachable GitHub means "Tiger's defaults", never a stuck
+ * page. Everything is shape-checked; junk upstream degrades to an empty list.
+ * ------------------------------------------------------------------------- */
+
+function list_fetch($home, $name, $url) {
+    $cache = job_dir($home) . '/' . $name . '.json';
+    if (is_file($cache) && filemtime($cache) > time() - 3600) { $j = json_decode((string) @file_get_contents($cache), true); if (is_array($j)) { return $j; } }
+    list($body, $code) = Tiger_Headless_Http::get($url, 'application/json', LIST_TIMEOUT);
+    $j = ($body !== null && $code < 400) ? json_decode($body, true) : null;
+    if (is_array($j)) { @mkdir(job_dir($home), 0700, true); @file_put_contents($cache, $body); @chmod($cache, 0600); return $j; }
+    return is_file($cache) ? (json_decode((string) @file_get_contents($cache), true) ?: null) : null;   // stale beats absent
+}
+
+/** {featured:{theme,modules}, packs:[{id,name,description,default,skills:[{repo,path,ref}]}]} */
+function catalog_load($home) {
+    $out = ['featured' => ['theme' => '', 'modules' => []], 'packs' => []];
+    $doc = list_fetch($home, 'catalog', CATALOG_URL);
+    if (!is_array($doc)) { return $out; }
+    $slug = static fn($v) => preg_match('/^[a-z0-9][a-z0-9_-]*$/', $v = strtolower(trim((string) $v))) ? $v : '';
+    $f = is_array($doc['featured'] ?? null) ? $doc['featured'] : [];
+    $out['featured']['theme']   = $slug($f['theme'] ?? '');
+    $out['featured']['modules'] = array_values(array_filter(array_map($slug, is_array($f['modules'] ?? null) ? $f['modules'] : [])));
+    foreach ((is_array($doc['skill_packs'] ?? null) ? $doc['skill_packs'] : []) as $pk) {
+        if (!is_array($pk) || ($id = $slug($pk['id'] ?? '')) === '') { continue; }
+        $skills = [];
+        foreach ((is_array($pk['skills'] ?? null) ? $pk['skills'] : []) as $sk) {
+            if (!is_array($sk)) { continue; }
+            $repo = trim((string) ($sk['repo'] ?? '')); $path = trim((string) ($sk['path'] ?? ''), '/'); $ref = trim((string) ($sk['ref'] ?? 'main'));
+            if (!preg_match('#^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$#', $repo) || $path === '' || strpos($path, '..') !== false) { continue; }
+            $skills[] = ['repo' => $repo, 'path' => $path, 'ref' => $ref !== '' ? $ref : 'main'];
+        }
+        if (!$skills) { continue; }
+        $out['packs'][] = ['id' => $id, 'name' => trim(strip_tags((string) ($pk['name'] ?? $id))), 'description' => trim(strip_tags((string) ($pk['description'] ?? ''))), 'default' => !empty($pk['default']), 'skills' => $skills];
+    }
+    return $out;
+}
+
+/** {themes:[{slug,name,version}], modules:[{slug,name,version,description}]} — free, end-user installables only. */
+function directory_load($home) {
+    $out = ['themes' => [], 'modules' => []];
+    $idx = list_fetch($home, 'directory', DIRECTORY_URL);
+    foreach ((is_array($idx['modules'] ?? null) ? $idx['modules'] : []) as $m) {
+        if (!is_array($m)) { continue; }
+        $slug = strtolower(trim((string) ($m['slug'] ?? '')));
+        if (!preg_match('/^[a-z0-9][a-z0-9_-]*$/', $slug) || (string) ($m['pricing']['model'] ?? 'free') !== 'free' || empty($m['repository'])) { continue; }
+        $type = (string) ($m['type'] ?? '');
+        if (!in_array($type, ['theme', 'app', 'plugin', 'code'], true)) { continue; }
+        $row = ['slug' => $slug, 'name' => trim(strip_tags((string) ($m['module'] ?? $m['name'] ?? $slug))), 'version' => trim(strip_tags((string) ($m['version'] ?? ''))), 'description' => trim(strip_tags((string) ($m['description'] ?? '')))];
+        $out[$type === 'theme' ? 'themes' : 'modules'][] = $row;
+    }
+    usort($out['themes'],  static fn($a, $b) => strcmp($a['name'], $b['name']));
+    usort($out['modules'], static fn($a, $b) => strcmp($a['name'], $b['name']));
+    return $out;
+}
+
+/** The flat, deduplicated skills list the engine takes, from the chosen pack ids. */
+function skills_for(array $catalog, array $packIds) {
+    $out = []; $seen = [];
+    foreach ($catalog['packs'] as $pk) {
+        if (!in_array($pk['id'], $packIds, true)) { continue; }
+        foreach ($pk['skills'] as $sk) { $k = strtolower($sk['repo'] . '@' . $sk['path']); if (!isset($seen[$k])) { $seen[$k] = true; $out[] = $sk; } }
+    }
+    return $out;
+}
+
+/**
+ * The "What to install" card: theme, modules, skill packs — pre-selected from the catalog until the
+ * person has seen the card once (`choices_seen`), after which what they ticked is what they get.
+ */
+function choices_form(array $bag, array $catalog, array $dir) {
+    $seen    = $bag['choices_seen'] === '1';
+    $theme   = $seen ? $bag['theme'] : $catalog['featured']['theme'];
+    $modules = $seen ? $bag['modules'] : $catalog['featured']['modules'];
+    $packs   = $seen ? $bag['packs'] : array_column(array_filter($catalog['packs'], static fn($p) => $p['default']), 'id');
+    $h = '<div class="card"><h2>What to install</h2><input type="hidden" name="choices_seen" value="1">';
+    if (!$dir['themes'] && !$dir['modules'] && !$catalog['packs']) {
+        return $h . '<p class="mut">The lists could not be fetched from GitHub just now — Tiger installs with its built-in defaults; add themes, modules and skills later from the admin.</p></div>';
+    }
+    $h .= '<label>Theme</label><select name="theme" style="width:100%;padding:10px 12px;background:#0d1014;border:1px solid var(--line);border-radius:8px;color:var(--ink);font:inherit">'
+        . '<option value="">Tiger default</option>';
+    foreach ($dir['themes'] as $t) { $h .= '<option value="' . h($t['slug']) . '"' . ($theme === $t['slug'] ? ' selected' : '') . '>' . h($t['name']) . ($t['version'] !== '' ? ' ' . h($t['version']) : '') . '</option>'; }
+    $h .= '</select>';
+    if ($dir['modules']) {
+        $h .= '<label style="margin-top:16px">Modules</label><div class="grid">';
+        foreach ($dir['modules'] as $m) {
+            $h .= '<label style="display:flex;gap:8px;align-items:flex-start;font-weight:400;margin:4px 0" title="' . h($m['description']) . '"><input type="checkbox" name="modules[]" value="' . h($m['slug']) . '"' . (in_array($m['slug'], $modules, true) ? ' checked' : '') . ' style="margin-top:4px"><span>' . h($m['name']) . ($m['version'] !== '' ? ' <span class="mut">' . h($m['version']) . '</span>' : '') . '</span></label>';
+        }
+        $h .= '</div>';
+    }
+    if ($catalog['packs']) {
+        $h .= '<label style="margin-top:16px">Skills for Tiger\'s AI agent <span class="mut" style="font-weight:400">— installed as sets; add or remove any later from Settings → Agent → Skills</span></label><div class="grid">';
+        foreach ($catalog['packs'] as $pk) {
+            $h .= '<label style="display:flex;gap:9px;align-items:flex-start;font-weight:400;padding:10px 12px;border:1px solid var(--line);border-radius:8px;margin:4px 0"><input type="checkbox" name="packs[]" value="' . h($pk['id']) . '"' . (in_array($pk['id'], $packs, true) ? ' checked' : '') . ' style="margin-top:4px"><span><strong>' . h($pk['name']) . '</strong><br><span class="mut" style="font-size:.9em">' . h($pk['description']) . '</span></span></label>';
+        }
+        $h .= '</div>';
+    }
+    return $h . '</div>';
+}
+
+/* ---------------------------------------------------------------------------
  * Page + forms
  * ------------------------------------------------------------------------- */
 
@@ -188,7 +301,7 @@ function steps_nav($active) {
 function hidden_bag($bag, $exclude = []) {
     $out = '<input type="hidden" name="_csrf" value="' . h(csrf_token()) . '">';
     foreach ($bag as $k => $v) {
-        if (in_array($k, $exclude, true)) { continue; }
+        if (in_array($k, $exclude, true) || is_array($v)) { continue; }
         $out .= '<input type="hidden" name="' . h($k) . '" value="' . h($v) . '">';
     }
     return $out;
@@ -217,7 +330,8 @@ function field($label, $name, $type, $value, $placeholder = '') {
  * The details form — the database you created in cPanel + the admin account you want, one screen.
  * Used for the first ask AND on any error (re-populates every field, passwords included).
  */
-function admin_form($bag, $errNote = '') {
+function admin_form($bag, $errNote = '', ?array $catalog = null, ?array $dir = null) {
+    $bag += ['choices_seen' => '', 'theme' => '', 'modules' => [], 'packs' => []];
     return '<h1>Your database and admin account</h1>'
         . ($errNote !== '' ? '<div class="note bad">' . h($errNote) . '</div>' : '')
         // The handoff. An assistant that drove the browser here should stop: the admin password is the
@@ -231,13 +345,14 @@ function admin_form($bag, $errNote = '') {
         . '<li>Create a <strong>New Database</strong> (e.g. <code>tiger</code>).</li>'
         . '<li>Create a <strong>User</strong> + password, then <strong>Add User to Database</strong> with <strong>ALL PRIVILEGES</strong>.</li>'
         . '<li>Paste the resulting names below (cPanel prefixes them, e.g. <code>acct_tiger</code>).</li></ol></div>'
-        . '<form method="post">' . hidden_bag($bag, ['db_host', 'db_name', 'db_user', 'db_pass', 'org', 'email', 'email2', 'username', 'password', 'password2', 'agent'])
+        . '<form method="post">' . hidden_bag($bag, ['db_host', 'db_name', 'db_user', 'db_pass', 'org', 'email', 'email2', 'username', 'password', 'password2', 'agent', 'choices_seen', 'theme', 'modules', 'packs'])
         . '<div class="card"><h2>Database</h2><div class="grid">'
         . field('Database host', 'db_host', 'text', $bag['db_host'] !== '' ? $bag['db_host'] : 'localhost')
         . field('Database name', 'db_name', 'text', $bag['db_name'], 'acct_tiger')
         . field('Database user', 'db_user', 'text', $bag['db_user'], 'acct_tiger')
         . field('Database password', 'db_pass', 'password', $bag['db_pass'])
         . '</div></div>'
+        . ($catalog !== null && $dir !== null ? choices_form($bag, $catalog, $dir) : '')
         . '<div class="card"><h2>Admin account</h2><div class="grid">'
         . field('Organization name', 'org', 'text', $bag['org'], 'My Company')
         . field('Username (optional)', 'username', 'text', $bag['username'])
@@ -335,6 +450,9 @@ function spec_from_bag(array $bag, $domain, $scheme) {
         'site'   => ['url' => $scheme . '://' . $domain, 'name' => $bag['org'] !== '' ? $bag['org'] : $domain],
         'admin'  => ['username' => $bag['username'], 'email' => $bag['email'], 'password' => $bag['password'], 'org' => $bag['org'] !== '' ? $bag['org'] : $domain],
         'agent'  => truthy($bag['agent']),
+        'theme'   => (string) ($bag['theme'] ?? ''),
+        'modules' => array_values((array) ($bag['modules'] ?? [])),
+        'skills'  => array_values((array) ($bag['skills'] ?? [])),
     ];
 }
 
@@ -382,9 +500,11 @@ $step    = req('step', 'welcome');
 
 // The value bag — read every field each request; fill sensible defaults once.
 $bag = [];
-foreach (['app_dir', 'docroot', 'db_host', 'db_name', 'db_user', 'db_pass', 'org', 'email', 'email2', 'username', 'password', 'password2', 'agent'] as $f) {
+foreach (['app_dir', 'docroot', 'db_host', 'db_name', 'db_user', 'db_pass', 'org', 'email', 'email2', 'username', 'password', 'password2', 'agent', 'choices_seen', 'theme'] as $f) {
     $bag[$f] = post($f, '');
 }
+$bag['modules'] = posta('modules'); $bag['packs'] = posta('packs');
+if (!preg_match('/^[a-z0-9][a-z0-9_-]*$/', $bag['theme'])) { $bag['theme'] = ''; }
 // `agent` may be SEEDED from the query string (?agent=1) but only on a GET. On a POST the visible
 // checkbox is the only authority, so un-ticking it actually turns it off — an unchecked box submits
 // nothing, which is exactly what makes the seeded choice reversible (TIGER-90).
@@ -470,10 +590,13 @@ case 'location':
 
 /* --- Details — the database + the admin account, one form -------------- */
 case 'details':
-    page('Database & admin', steps_nav('details') . admin_form($bag),
+    $catalog = catalog_load($home); $dir = directory_load($home);
+    page('Database & admin', steps_nav('details') . admin_form($bag, '', $catalog, $dir),
         ['installer' => INSTALLER_VERSION, 'step' => 'details', 'status' => 'awaiting-input', 'next_step' => 'install',
-         'fields' => ['db_host', 'db_name', 'db_user', 'db_pass', 'org', 'email', 'email2', 'username', 'password', 'password2', 'agent'],
+         'fields' => ['db_host', 'db_name', 'db_user', 'db_pass', 'theme', 'modules[]', 'packs[]', 'org', 'email', 'email2', 'username', 'password', 'password2', 'agent'],
          'agent_requested' => $agentWanted,
+         'choices' => ['themes' => array_column($dir['themes'], 'slug'), 'modules' => array_column($dir['modules'], 'slug'), 'packs' => array_column($catalog['packs'], 'id'),
+                       'preselected' => ['theme' => $catalog['featured']['theme'], 'modules' => $catalog['featured']['modules'], 'packs' => array_column(array_filter($catalog['packs'], static fn($p) => $p['default']), 'id')]],
          // For a client that drove the browser here: stop, hand over, ask for the file afterwards.
          'handoff' => 'Stop here. The person fills in the database and their admin account and clicks Install Tiger; '
                     . 'when it finishes they download the credentials file — ask them for it. It carries the site URL, '
@@ -482,7 +605,9 @@ case 'details':
 
 /* --- Install — hand the engine its spec, then one hop per request ------- */
 case 'install':
-    $detailsFields = ['db_host', 'db_name', 'db_user', 'db_pass', 'org', 'email', 'email2', 'username', 'password', 'password2', 'agent'];
+    $detailsFields = ['db_host', 'db_name', 'db_user', 'db_pass', 'theme', 'modules[]', 'packs[]', 'org', 'email', 'email2', 'username', 'password', 'password2', 'agent'];
+    $catalog = $job === null ? catalog_load($home) : null; $dir = $job === null ? directory_load($home) : null;
+    if ($job === null) { $bag['skills'] = skills_for($catalog, $bag['packs']); }
     $errState = static fn($error, $detail) => ['installer' => INSTALLER_VERSION, 'step' => 'details', 'status' => 'error', 'error' => $error,
         'detail' => $detail, 'fields' => $detailsFields, 'agent_requested' => truthy($bag['agent'])];
 
@@ -494,7 +619,7 @@ case 'install':
         }
         $err = admin_errors($bag);
         if ($err === '' && ($bag['db_name'] === '' || $bag['db_user'] === '')) { $err = 'Enter the database name and user you created in cPanel.'; }
-        if ($err !== '') { page('Database & admin', steps_nav('details') . admin_form($bag, $err), $errState('admin_fields_invalid', $err)); break; }
+        if ($err !== '') { page('Database & admin', steps_nav('details') . admin_form($bag, $err, $catalog, $dir), $errState('admin_fields_invalid', $err)); break; }
 
         $spec = spec_from_bag($bag, $domain, $scheme);
         // A bundle uploaded by hand on an earlier attempt (see the download-failure path) is reused.
@@ -503,17 +628,17 @@ case 'install':
             $validated = new Tiger_Headless_Spec($spec);
         } catch (Tiger_Headless_SpecException $e) {
             $err = implode(' ', $e->problems());
-            page('Database & admin', steps_nav('details') . admin_form($bag, $err), $errState('spec_invalid', $err)); break;
+            page('Database & admin', steps_nav('details') . admin_form($bag, $err, $catalog, $dir), $errState('spec_invalid', $err)); break;
         }
         $check = (new Tiger_Headless_Installer($validated))->check()->toArray();
         if (empty($check['ok'])) {
             $err = (string) ($check['error']['message'] ?? 'requirements failed');
-            page('Database & admin', steps_nav('details') . admin_form($bag, $err), $errState('requirements_failed', $err)); break;
+            page('Database & admin', steps_nav('details') . admin_form($bag, $err, $catalog, $dir), $errState('requirements_failed', $err)); break;
         }
         $job = ['spec' => $spec, 'bag' => array_diff_key($bag, ['db_pass' => 1, 'password' => 1, 'password2' => 1]) + ['db_pass' => $bag['db_pass'], 'password' => $bag['password']], 'started' => gmdate('c')];
         if (!job_save($home, $job)) {
             $err = 'Could not write the install record under ' . h(job_dir($home)) . ' — is the home folder writable?';
-            page('Database & admin', steps_nav('details') . admin_form($bag, $err), $errState('job_write_failed', $err)); break;
+            page('Database & admin', steps_nav('details') . admin_form($bag, $err, $catalog, $dir), $errState('job_write_failed', $err)); break;
         }
     } elseif (!empty($_FILES['bundle']['tmp_name']) && is_uploaded_file($_FILES['bundle']['tmp_name'])) {
         // Manual upload after a download failure: becomes source.bundle (unverified — the engine says so).

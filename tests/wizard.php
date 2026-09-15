@@ -94,6 +94,36 @@ is_true ('confirm password field', (bool) preg_match('/name="password2"/', $af))
 is_false('neither rides in the hidden bag',
     (bool) preg_match('/type="hidden" name="(email2|password2)"/', $af));
 
+group('What to install — the choices card (catalog + Directory)');
+$cat = ['featured' => ['theme' => 'theme-grey-mist', 'modules' => ['docs']], 'packs' => [
+    ['id' => 'web-design', 'name' => 'Web design', 'description' => 'd1', 'default' => true,  'skills' => [['repo' => 'WebTigers/Skills', 'path' => 'skills/tiger-design', 'ref' => 'main'], ['repo' => 'anthropics/skills', 'path' => 'skills/frontend-design', 'ref' => 'main']]],
+    ['id' => 'documents',  'name' => 'Documents',  'description' => 'd2', 'default' => false, 'skills' => [['repo' => 'anthropics/skills', 'path' => 'skills/docx', 'ref' => 'main'], ['repo' => 'WebTigers/Skills', 'path' => 'skills/tiger-design', 'ref' => 'main']]],
+]];
+$dir = ['themes' => [['slug' => 'theme-grey-mist', 'name' => 'Grey Mist', 'version' => '1.0.0', 'description' => '']], 'modules' => [['slug' => 'docs', 'name' => 'TigerDocs', 'version' => '1.0.3', 'description' => 'x'], ['slug' => 'tigershield', 'name' => 'TigerShield', 'version' => '1.0.5', 'description' => 'y']]];
+$fresh = choices_form(['choices_seen' => '', 'theme' => '', 'modules' => [], 'packs' => []], $cat, $dir);
+is_true ('featured theme is pre-selected',      (bool) preg_match('/value="theme-grey-mist" selected/', $fresh));
+is_true ('featured module is pre-ticked',       (bool) preg_match('/name="modules\[\]" value="docs" checked/', $fresh));
+is_false('an unfeatured module is not',         (bool) preg_match('/name="modules\[\]" value="tigershield" checked/', $fresh));
+is_true ('default pack is pre-ticked',          (bool) preg_match('/name="packs\[\]" value="web-design" checked/', $fresh));
+is_false('a non-default pack is not',           (bool) preg_match('/name="packs\[\]" value="documents" checked/', $fresh));
+is_true ('the card marks itself seen',          strpos($fresh, 'name="choices_seen" value="1"') !== false);
+$seen = choices_form(['choices_seen' => '1', 'theme' => '', 'modules' => ['tigershield'], 'packs' => []], $cat, $dir);
+is_true ('after the person chose, their choice wins (theme = default)',  (bool) preg_match('/<option value="" selected>/', $seen) || !preg_match('/value="theme-grey-mist" selected/', $seen));
+is_true ('…their module tick wins',                                       (bool) preg_match('/value="tigershield" checked/', $seen));
+is_false('…and an untick stays unticked',                                 (bool) preg_match('/value="docs" checked/', $seen));
+is_false('…packs they cleared stay clear',                                (bool) preg_match('/value="web-design" checked/', $seen));
+$sk = skills_for($cat, ['web-design', 'documents']);
+is_same('packs expand to a flat, deduplicated skills list', count($sk), 3);
+is_same('the engine shape {repo,path,ref}', array_keys($sk[0]), ['repo', 'path', 'ref']);
+is_same('no packs → no skills', skills_for($cat, []), []);
+$empty = choices_form(['choices_seen' => '', 'theme' => '', 'modules' => [], 'packs' => []], ['featured' => ['theme' => '', 'modules' => []], 'packs' => []], ['themes' => [], 'modules' => []]);
+is_true ('unreachable lists say so and fall back to defaults', stripos($empty, 'built-in defaults') !== false);
+is_false('…and offer nothing to tick', (bool) preg_match('/type="checkbox"/', $empty));
+$spec = spec_from_bag(['db_host' => 'localhost', 'db_name' => 'n', 'db_user' => 'u', 'db_pass' => 'p', 'app_dir' => '/h/a', 'docroot' => '/h/d', 'org' => 'O', 'username' => '', 'email' => 'e@x.io', 'password' => 'pw', 'agent' => '', 'theme' => 'theme-grey-mist', 'modules' => ['docs'], 'skills' => $sk], 'x.io', 'https');
+is_same('the spec carries theme',   $spec['theme'],   'theme-grey-mist');
+is_same('the spec carries modules', $spec['modules'], ['docs']);
+is_same('the spec carries skills',  count($spec['skills']), 3);
+
 group('The credentials backup file');
 $bag = $ok + ['db_host'=>'localhost','db_name'=>'cp_tiger','db_user'=>'cp_tiger','db_pass'=>'dbsecret',
               'app_dir'=>'/home/u/site/tiger-app','docroot'=>'/home/u/public_html'];

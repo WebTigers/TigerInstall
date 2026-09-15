@@ -41,8 +41,11 @@ root — relies on the web server never serving `.php` as text. Tiger inverts th
 
 1. **Checks your host** meets Tiger's requirements (PHP 8.1+, `pdo_mysql`, `zip`, …) — a clear
    pass/fail list with the exact fix for anything short.
-2. **Asks for the database you created in cPanel** and the admin account you want — one screen —
-   and proves the database accepts the credentials before anything is written.
+2. **Asks for the database you created in cPanel**, what to install — theme, modules and skill packs
+   for Tiger's AI agent, read live from the public [catalog](https://github.com/WebTigers/TigerCatalog)
+   and [Directory](https://github.com/WebTigers/TigerVendors), pre-selected to the catalog's defaults —
+   and the admin account you want, on one screen; then proves the database accepts the credentials
+   before anything is written.
 3. **Downloads the latest Tiger release** ZIP from GitHub and **verifies it** against the release's
    published `.sha256` (over TLS). Manual upload if your host can't reach GitHub.
 4. **Extracts the app above your document root** — code, `local.ini`, secrets — where no URL reaches.
@@ -123,6 +126,7 @@ Every page carries a JSON block. Read it instead of the prose:
 | `fields` | the field names this screen expects |
 | `error` / `detail` | a stable error slug plus the human message, when `status` is `error` |
 | `checks` | requirements only: each check with `ok`, `required`, and a `fix` when failing |
+| `choices` | `details` only: the offered `themes` / `modules` / `packs` (slugs) and what is `preselected` — post `theme`, `modules[]`, `packs[]` with `choices_seen=1` to override |
 | `steps` / `failed_at` / `manual_upload` | `install` only: the engine steps this hop ran (`step`, `status`, `detail`); on `error`, the step that stopped and whether a hand-uploaded bundle is offered |
 
 `status` alone answers "did that work?" — `blocked` means an unmet requirement the user must fix,

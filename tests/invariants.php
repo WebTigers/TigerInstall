@@ -34,8 +34,14 @@ foreach (['callback', 'webhook', 'notify_url', 'redirect_uri', 'postback', 'retu
     is_false("no `$field` is ever read as input", (bool) $used);
 }
 
-// Outbound requests belong to the vendored engine (pinned release/API hosts); the wizard makes none.
-is_same('the wizard itself makes no outbound HTTP call', preg_match_all('/Tiger_Headless_Http::(get|download)\s*\(/', $wizard), 0);
+// Outbound requests from the wizard reach ONLY the two pinned public lists (catalog + Directory); the
+// release download belongs to the vendored engine. A runtime-supplied URL here would be an exfiltration
+// or a fetch-from-anywhere channel, so every call site is checked by name.
+preg_match_all('/Tiger_Headless_Http::(?:get|download)\s*\(\s*([^,\)]+)/', $wizard, $calls);
+$dyn = array_values(array_filter(array_map('trim', $calls[1]), static fn($arg) => !preg_match('/^(\$url|CATALOG_URL|DIRECTORY_URL)$/', $arg)));
+is_same('wizard outbound calls use only the pinned list URLs', $dyn, []);
+is_true ('list_fetch is only ever handed the two constants', preg_match_all('/list_fetch\(\$home,\s*\'[a-z]+\',\s*(CATALOG_URL|DIRECTORY_URL)\)/', $wizard) === 2 && preg_match_all('/list_fetch\(/', $wizard) === 3);
+is_true ('the list URLs are raw.githubusercontent.com', (bool) preg_match("/CATALOG_URL\s*=\s*'https:\/\/raw\.githubusercontent\.com\/WebTigers\/TigerCatalog\//", $wizard) && (bool) preg_match("/DIRECTORY_URL\s*=\s*'https:\/\/raw\.githubusercontent\.com\/WebTigers\/TigerVendors\//", $wizard));
 is_false('the wizard has no HTTP client of its own', (bool) preg_match('/\b(curl_init|file_get_contents\s*\(\s*[\'"]https?:)/', $wizard));
 
 group('The install is the engine, not this file (TIGER-127)');
