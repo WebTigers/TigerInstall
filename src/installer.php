@@ -31,7 +31,7 @@ error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
 @ini_set('display_errors', '1');
 @set_time_limit(0);
 
-const INSTALLER_VERSION = '2.1.0';
+const INSTALLER_VERSION = '2.1.1';
 const ENGINE_VERSION    = '@@ENGINE_VERSION@@';   // stamped by build.php from the vendored tag
 const RELEASE_REPO      = 'webtigers/tiger';      // the skeleton repo whose releases host the full-app bundle
 const MIN_PHP           = '8.1.0';
@@ -697,6 +697,13 @@ case 'install':
     } else {
         $result = ['ok' => true, 'steps' => [], 'complete' => (new Tiger_Headless_State($appDir))->installed(), 'version' => (new Tiger_Headless_State($appDir))->version()];
     }
+    // The agent credential is shown ONCE, on the finish screen — but with one step per request the
+    // step that mints it is not the request that finishes. Carry it in the job file (0600, above the
+    // docroot, deleted at finish) so the finish screen and the credentials file can show it.
+    if (!empty($result['agent']['token'])) {
+        $job['agent'] = $result['agent'];
+        job_save($home, $job);
+    }
     $done   = !empty($result['ok']) && (!empty($result['complete']) || !empty($result['already_installed']));
 
     if ($done) {
@@ -708,7 +715,8 @@ case 'install':
             $sec = (float) ($ledger[$st]['seconds'] ?? 0); $total += $sec;
             $summary .= '<tr><td class="mut" style="width:45%">' . h($labels[$st] ?? $st) . '</td><td>' . ($sec >= 0.05 ? number_format($sec, 1) . ' s' : '<span class="mut">—</span>') . ' <span class="mut" style="font-size:.85em">' . h(mb_strimwidth((string) ($ledger[$st]['detail'] ?? ''), 0, 90, '…')) . '</span></td></tr>';
         }
-        $agent = !empty($result['agent']['token']) ? ['ok' => true, 'token' => $result['agent']['token'], 'modules' => (array) ($result['agent']['modules'] ?? [])] : ['ok' => false, 'error' => ''];
+        $minted = !empty($result['agent']['token']) ? $result['agent'] : (!empty($job['agent']['token']) ? $job['agent'] : null);
+        $agent  = $minted ? ['ok' => true, 'token' => $minted['token'], 'modules' => (array) ($minted['modules'] ?? [])] : ['ok' => false, 'error' => ''];
         $agentWanted = !empty($spec['agent']);
         job_clear($home);
         @unlink(job_dir($home) . '/tiger.zip'); @rmdir(job_dir($home));
@@ -740,8 +748,8 @@ case 'install':
                 . '</table>'
                 . '<div class="note">Keep it like a password. If it ever leaks, revoke it at <code>/mcp/admin</code> and mint a new one — the site itself is unaffected.</div>'
                 . '</div>';
-        } elseif ($agentWanted && (new Tiger_Headless_State($appDir))->stepDone('agent') && empty($result['steps'])) {
-            // Minted on an earlier request whose page was lost. It was shown once; it cannot be shown again.
+        } elseif ($agentWanted && (new Tiger_Headless_State($appDir))->stepDone('agent')) {
+            // Minted, but the job record no longer has it (a finish page reloaded after the job was cleared).
             $body .= '<div class="note"><strong>The agent access key was shown on the earlier screen</strong> and cannot be displayed again. '
                 . 'If you did not save it, mint a new one at <code>' . h($base) . '/mcp/admin</code>.</div>';
         } elseif ($agentWanted) {
