@@ -232,12 +232,22 @@ function choices_form(array $bag, array $catalog, array $dir) {
         . '<option value="">Tiger default</option>';
     foreach ($dir['themes'] as $t) { $h .= '<option value="' . h($t['slug']) . '"' . ($theme === $t['slug'] ? ' selected' : '') . '>' . h($t['name']) . ($t['version'] !== '' ? ' ' . h($t['version']) : '') . '</option>'; }
     $h .= '</select>';
+    // ComingSoon — a dedicated, always-offered option (TIGER-231), distinct from the generic Directory loop
+    // below so a feed hiccup can't drop it: the branded holding page that owns "/" on a fresh install and
+    // self-deactivates the moment a real theme/page publishes. Checked by default; it rides the same
+    // `modules[]` → spec.modules path, so when ticked the engine installs AND activates it.
+    $csChecked = $seen ? in_array('comingsoon', $bag['modules'], true) : true;
+    $h .= '<label style="margin-top:16px">Landing page</label>'
+        . '<label style="display:flex;gap:9px;align-items:flex-start;font-weight:400;padding:10px 12px;border:1px solid var(--line);border-radius:8px;margin:4px 0">'
+        . '<input type="checkbox" name="modules[]" value="comingsoon"' . ($csChecked ? ' checked' : '') . ' style="margin-top:4px">'
+        . '<span><strong>Install Coming Soon module</strong><br><span class="mut" style="font-size:.9em">A branded holding page that owns your home page on a fresh install and steps aside automatically once you publish a real site.</span></span></label>';
     if ($dir['modules']) {
-        $h .= '<label style="margin-top:16px">Modules</label><div class="grid">';
+        $rows = '';
         foreach ($dir['modules'] as $m) {
-            $h .= '<label style="display:flex;gap:8px;align-items:flex-start;font-weight:400;margin:4px 0" title="' . h($m['description']) . '"><input type="checkbox" name="modules[]" value="' . h($m['slug']) . '"' . (in_array($m['slug'], $modules, true) ? ' checked' : '') . ' style="margin-top:4px"><span>' . h($m['name']) . ($m['version'] !== '' ? ' <span class="mut">' . h($m['version']) . '</span>' : '') . '</span></label>';
+            if ($m['slug'] === 'comingsoon') { continue; }   // offered above as its own default-on option
+            $rows .= '<label style="display:flex;gap:8px;align-items:flex-start;font-weight:400;margin:4px 0" title="' . h($m['description']) . '"><input type="checkbox" name="modules[]" value="' . h($m['slug']) . '"' . (in_array($m['slug'], $modules, true) ? ' checked' : '') . ' style="margin-top:4px"><span>' . h($m['name']) . ($m['version'] !== '' ? ' <span class="mut">' . h($m['version']) . '</span>' : '') . '</span></label>';
         }
-        $h .= '</div>';
+        if ($rows !== '') { $h .= '<label style="margin-top:16px">Modules</label><div class="grid">' . $rows . '</div>'; }
     }
     if ($catalog['packs']) {
         $h .= '<label style="margin-top:16px">Skills for Tiger\'s AI agent <span class="mut" style="font-weight:400">— installed as sets; add or remove any later from Settings → Agent → Skills</span></label><div class="grid">';

@@ -107,10 +107,13 @@ is_false('an unfeatured module is not',         (bool) preg_match('/name="module
 is_true ('default pack is pre-ticked',          (bool) preg_match('/name="packs\[\]" value="web-design" checked/', $fresh));
 is_false('a non-default pack is not',           (bool) preg_match('/name="packs\[\]" value="documents" checked/', $fresh));
 is_true ('the card marks itself seen',          strpos($fresh, 'name="choices_seen" value="1"') !== false);
+is_true ('ComingSoon is offered as its own default-on option (TIGER-231)', (bool) preg_match('/name="modules\[\]" value="comingsoon" checked/', $fresh));
+is_same('…rendered exactly once, not also in the generic Directory loop',  substr_count($fresh, 'value="comingsoon"'), 1);
 $seen = choices_form(['choices_seen' => '1', 'theme' => '', 'modules' => ['tigershield'], 'packs' => []], $cat, $dir);
 is_true ('after the person chose, their choice wins (theme = default)',  (bool) preg_match('/<option value="" selected>/', $seen) || !preg_match('/value="theme-grey-mist" selected/', $seen));
 is_true ('…their module tick wins',                                       (bool) preg_match('/value="tigershield" checked/', $seen));
 is_false('…and an untick stays unticked',                                 (bool) preg_match('/value="docs" checked/', $seen));
+is_false('…an unticked ComingSoon stays unticked (TIGER-231)',            (bool) preg_match('/value="comingsoon" checked/', $seen));
 is_false('…packs they cleared stay clear',                                (bool) preg_match('/value="web-design" checked/', $seen));
 $sk = skills_for($cat, ['web-design', 'documents']);
 is_same('packs expand to a flat, deduplicated skills list', count($sk), 3);
