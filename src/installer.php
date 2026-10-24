@@ -31,7 +31,7 @@ error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
 @ini_set('display_errors', '1');
 @set_time_limit(0);
 
-const INSTALLER_VERSION = '2.3.0';
+const INSTALLER_VERSION = '2.4.0';
 const ENGINE_VERSION    = '@@ENGINE_VERSION@@';   // stamped by build.php from the vendored tag
 const RELEASE_REPO      = 'webtigers/tiger';      // the skeleton repo whose releases host the full-app bundle
 const MIN_PHP           = '8.1.0';
