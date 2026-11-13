@@ -206,7 +206,7 @@ screen verifies all of this and tells you what to toggle in cPanel. Full detail:
 
 ## Status
 
-> **Beta.** This installer targets the **vendored full-app release bundle** (`tiger-<version>.zip` +
+> This installer targets the **vendored full-app release bundle** (`tiger-<version>.zip` +
 > `.sha256`) attached to [`WebTigers/Tiger`](https://github.com/WebTigers/Tiger) releases. That bundle
 > **is now published** — the installer resolves the latest release at runtime, so no manual step is
 > needed. The **manual upload** path remains available for an air-gapped or pinned install, and
@@ -215,8 +215,6 @@ screen verifies all of this and tells you what to toggle in cPanel. Full detail:
 > ```bash
 > composer create-project webtigers/tiger my-app
 > ```
->
-> (The `--stability=beta` flag is no longer needed — the skeleton publishes stable tags.)
 
 ## Development
 
